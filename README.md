@@ -54,6 +54,8 @@ For TCP targets, you can pass just a port (for example `6379`), and it is treate
 
 `--cluster <HOST:PORT>` uses the provided TCP seed node(s) to run `CLUSTER SHARDS`
 and auto-discover every primary/replica endpoint in the cluster for monitoring.
+Realtime cluster role/parent updates also use `CLUSTER SHARDS` (not deprecated
+`CLUSTER NODES`) so startup discovery and ongoing topology mapping stay aligned.
 Like `--tcp`, a port-only value such as `--cluster 7000` is treated as
 `127.0.0.1:7000`.
 

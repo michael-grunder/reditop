@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use redis::{AsyncConnectionConfig, Client, ErrorKind};
+use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, Status, Target, TargetProtocol};
-use crate::parse::{parse_cluster_nodes, parse_info};
+use crate::parse::{ClusterShard, parse_cluster_shards, parse_info};
+use crate::target_addr::{canonical_host, strip_host};
 
 pub fn start(
     targets: Vec<Target>,
@@ -111,31 +112,12 @@ async fn poll_one(
     apply_info_to_state(&mut state, &info);
 
     if state.detail.cluster_enabled
-        && let Ok(nodes_text) = redis::cmd("CLUSTER")
-            .arg("NODES")
-            .query_async::<String>(&mut conn)
+        && let Ok(shards) = redis::cmd("CLUSTER")
+            .arg("SHARDS")
+            .query_async::<Value>(&mut conn)
             .await
     {
-        let nodes = parse_cluster_nodes(&nodes_text);
-        if let Some(myself) = nodes
-            .iter()
-            .find(|node| node.is_myself() || node.addr == target.addr)
-        {
-            state.cluster_id = cluster_signature(&nodes);
-            if myself.is_replica() {
-                state.kind = InstanceType::Replica;
-                state.parent_addr = myself
-                    .master_id
-                    .as_ref()
-                    .and_then(|master_id| nodes.iter().find(|node| node.node_id == *master_id))
-                    .map(|node| node.addr.clone());
-            } else if myself.is_master() {
-                state.kind = InstanceType::Primary;
-                state.parent_addr = None;
-            } else {
-                state.kind = InstanceType::Cluster;
-            }
-        }
+        apply_cluster_shards_to_state(&mut state, target, &shards);
     }
 
     state.push_latency_sample(latency_ms);
@@ -278,28 +260,143 @@ fn truncate_string(input: String, max_chars: usize) -> String {
     input.chars().take(max_chars).collect()
 }
 
-fn cluster_signature(nodes: &[crate::parse::ClusterNode]) -> Option<String> {
-    let mut ids: Vec<&str> = nodes.iter().map(|node| node.node_id.as_str()).collect();
+fn apply_cluster_shards_to_state(state: &mut InstanceState, target: &Target, value: &Value) {
+    let shards = parse_cluster_shards(value);
+    if shards.is_empty() {
+        return;
+    }
+
+    state.cluster_id = cluster_signature(&shards);
+
+    let myself = shards.iter().find_map(|shard| {
+        shard
+            .nodes
+            .iter()
+            .find(|node| addresses_match(&node.addr, &target.addr))
+            .map(|node| (shard, node))
+    });
+
+    let Some((shard, myself)) = myself else {
+        return;
+    };
+
+    if myself.is_replica() {
+        state.kind = InstanceType::Replica;
+        state.parent_addr = shard
+            .nodes
+            .iter()
+            .find(|node| node.is_primary())
+            .map(|node| node.addr.clone());
+    } else if myself.is_primary() {
+        state.kind = InstanceType::Primary;
+        state.parent_addr = None;
+    } else {
+        state.kind = InstanceType::Cluster;
+    }
+}
+
+fn cluster_signature(shards: &[ClusterShard]) -> Option<String> {
+    let mut ids: Vec<&str> = shards
+        .iter()
+        .flat_map(|shard| shard.nodes.iter())
+        .filter_map(|node| node.node_id.as_deref())
+        .collect();
     ids.sort_unstable();
-    ids.first().map(|id| (*id).to_string())
+    ids.dedup();
+    if let Some(id) = ids.first() {
+        return Some((*id).to_string());
+    }
+
+    let mut addrs: Vec<&str> = shards
+        .iter()
+        .flat_map(|shard| shard.nodes.iter())
+        .map(|node| node.addr.as_str())
+        .collect();
+    addrs.sort_unstable();
+    addrs.dedup();
+    addrs.first().map(|addr| (*addr).to_string())
+}
+
+fn addresses_match(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+
+    let left_host = canonical_host(left);
+    let right_host = canonical_host(right);
+    let left_port = strip_host(left);
+    let right_port = strip_host(right);
+    left_host.is_some() && left_host == right_host && left_port == right_port
 }
 
 #[cfg(test)]
 mod tests {
+    use redis::Value;
+
     use super::cluster_signature;
-    use crate::parse::parse_cluster_nodes;
+    use crate::parse::{ClusterShard, ClusterShardNode, ClusterShardRole, parse_cluster_shards};
 
     #[test]
     fn cluster_signature_is_stable_for_same_membership() {
-        let input_a = "bbbb 127.0.0.1:6380@16380 master - 0 0 1 connected\n\
-                       aaaa 127.0.0.1:6379@16379 myself,master - 0 0 1 connected\n";
-        let input_b = "aaaa 127.0.0.1:6379@16379 master - 0 0 1 connected\n\
-                       bbbb 127.0.0.1:6380@16380 myself,master - 0 0 1 connected\n";
+        let shards_a = vec![ClusterShard {
+            nodes: vec![
+                ClusterShardNode {
+                    node_id: Some("bbbb".to_string()),
+                    addr: "127.0.0.1:6380".to_string(),
+                    role: ClusterShardRole::Primary,
+                },
+                ClusterShardNode {
+                    node_id: Some("aaaa".to_string()),
+                    addr: "127.0.0.1:6379".to_string(),
+                    role: ClusterShardRole::Primary,
+                },
+            ],
+        }];
+        let shards_b = vec![ClusterShard {
+            nodes: vec![
+                ClusterShardNode {
+                    node_id: Some("aaaa".to_string()),
+                    addr: "127.0.0.1:6379".to_string(),
+                    role: ClusterShardRole::Primary,
+                },
+                ClusterShardNode {
+                    node_id: Some("bbbb".to_string()),
+                    addr: "127.0.0.1:6380".to_string(),
+                    role: ClusterShardRole::Primary,
+                },
+            ],
+        }];
 
-        let nodes_a = parse_cluster_nodes(input_a);
-        let nodes_b = parse_cluster_nodes(input_b);
+        assert_eq!(cluster_signature(&shards_a), Some("aaaa".to_string()));
+        assert_eq!(cluster_signature(&shards_a), cluster_signature(&shards_b));
+    }
 
-        assert_eq!(cluster_signature(&nodes_a), Some("aaaa".to_string()));
-        assert_eq!(cluster_signature(&nodes_a), cluster_signature(&nodes_b));
+    #[test]
+    fn cluster_signature_falls_back_to_addr_without_node_ids() {
+        let response = Value::Array(vec![Value::Map(vec![(
+            Value::BulkString(b"nodes".to_vec()),
+            Value::Array(vec![
+                Value::Map(vec![
+                    (
+                        Value::BulkString(b"endpoint".to_vec()),
+                        Value::BulkString(b"10.0.0.2".to_vec()),
+                    ),
+                    (Value::BulkString(b"port".to_vec()), Value::Int(7001)),
+                ]),
+                Value::Map(vec![
+                    (
+                        Value::BulkString(b"endpoint".to_vec()),
+                        Value::BulkString(b"10.0.0.1".to_vec()),
+                    ),
+                    (Value::BulkString(b"port".to_vec()), Value::Int(7000)),
+                ]),
+            ]),
+        )])]);
+
+        let shards = parse_cluster_shards(&response);
+        assert_eq!(
+            cluster_signature(&shards),
+            Some("10.0.0.1:7000".to_string())
+        );
     }
 }

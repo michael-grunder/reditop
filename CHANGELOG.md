@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reworked overview sorting to use selected column keys from the registry instead of fixed enum-only columns.
 - Extended config support to read `[columns.*]` and `[view.overview]` for column definitions, visible list, and default sort (`by`/`dir`).
 - Updated TUI styling to use configured foreground/background/carat colors and removed reverse-video selected-row default.
+- Replaced poll-time cluster topology mapping from `CLUSTER NODES` with shared `CLUSTER SHARDS` parsing logic, so startup discovery and realtime role/parent updates use one parser path.
 ### Deprecated
 ### Removed
 ### Fixed

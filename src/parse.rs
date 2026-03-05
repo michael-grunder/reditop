@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+use redis::Value;
 
 #[derive(Debug, Clone, Default)]
 pub struct ParsedInfo {
@@ -59,68 +61,263 @@ pub fn parse_info(input: &str) -> ParsedInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterNode {
-    pub node_id: String,
-    pub addr: String,
-    pub flags: Vec<String>,
-    pub master_id: Option<String>,
-    pub link_state: String,
+pub struct ClusterShard {
+    pub nodes: Vec<ClusterShardNode>,
 }
 
-impl ClusterNode {
-    pub fn is_master(&self) -> bool {
-        self.flags.iter().any(|flag| flag == "master")
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterShardNode {
+    pub node_id: Option<String>,
+    pub addr: String,
+    pub role: ClusterShardRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClusterShardRole {
+    Primary,
+    Replica,
+    Unknown,
+}
+
+impl ClusterShardRole {
+    fn from_value(raw: Option<String>) -> Self {
+        let Some(raw) = raw else {
+            return Self::Unknown;
+        };
+        match raw.to_ascii_lowercase().as_str() {
+            "master" | "primary" => Self::Primary,
+            "slave" | "replica" => Self::Replica,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl ClusterShardNode {
+    pub fn is_primary(&self) -> bool {
+        self.role == ClusterShardRole::Primary
     }
 
     pub fn is_replica(&self) -> bool {
-        self.flags
-            .iter()
-            .any(|flag| flag == "slave" || flag == "replica")
-    }
-
-    pub fn is_myself(&self) -> bool {
-        self.flags.iter().any(|flag| flag == "myself")
+        self.role == ClusterShardRole::Replica
     }
 }
 
-pub fn parse_cluster_nodes(input: &str) -> Vec<ClusterNode> {
-    let mut nodes = Vec::new();
-    for line in input.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+pub fn parse_cluster_shards(value: &Value) -> Vec<ClusterShard> {
+    let mut shards = Vec::new();
+    collect_cluster_shards(value, &mut shards);
+    shards
+}
+
+pub fn collect_cluster_shard_addresses(value: &Value) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for shard in parse_cluster_shards(value) {
+        for node in shard.nodes {
+            out.insert(node.addr);
         }
-
-        let fields: Vec<&str> = trimmed.split_whitespace().collect();
-        if fields.len() < 8 {
-            continue;
-        }
-
-        let addr = fields[1]
-            .split('@')
-            .next()
-            .map(str::to_string)
-            .unwrap_or_else(|| fields[1].to_string());
-        let flags = fields[2].split(',').map(str::to_string).collect();
-        let master_id = match fields[3] {
-            "-" => None,
-            value => Some(value.to_string()),
-        };
-
-        nodes.push(ClusterNode {
-            node_id: fields[0].to_string(),
-            addr,
-            flags,
-            master_id,
-            link_state: fields[7].to_string(),
-        });
     }
-    nodes
+    out
+}
+
+fn collect_cluster_shards(value: &Value, out: &mut Vec<ClusterShard>) {
+    if let Some(shard) = extract_cluster_shard(value) {
+        out.push(shard);
+    }
+
+    match value {
+        Value::Array(items) | Value::Set(items) => {
+            for item in items {
+                collect_cluster_shards(item, out);
+            }
+        }
+        Value::Map(entries) => {
+            for (_, value) in entries {
+                collect_cluster_shards(value, out);
+            }
+        }
+        Value::Attribute { data, attributes } => {
+            collect_cluster_shards(data, out);
+            for (_, value) in attributes {
+                collect_cluster_shards(value, out);
+            }
+        }
+        Value::Push { data, .. } => {
+            for value in data {
+                collect_cluster_shards(value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_cluster_shard(value: &Value) -> Option<ClusterShard> {
+    let kv = kv_pairs(value)?;
+    let nodes_value = kv
+        .into_iter()
+        .find_map(|(k, v)| (value_to_string(k)?.eq_ignore_ascii_case("nodes")).then_some(v))?;
+
+    let mut nodes = Vec::new();
+    collect_cluster_shard_nodes(nodes_value, &mut nodes);
+    if nodes.is_empty() {
+        return None;
+    }
+
+    nodes.sort_by(|a, b| a.addr.cmp(&b.addr));
+    nodes.dedup_by(|a, b| a.addr == b.addr);
+    Some(ClusterShard { nodes })
+}
+
+fn collect_cluster_shard_nodes(value: &Value, out: &mut Vec<ClusterShardNode>) {
+    if let Some(node) = extract_cluster_shard_node(value) {
+        out.push(node);
+    }
+    match value {
+        Value::Array(items) | Value::Set(items) => {
+            for item in items {
+                collect_cluster_shard_nodes(item, out);
+            }
+        }
+        Value::Map(entries) => {
+            for (_, item) in entries {
+                collect_cluster_shard_nodes(item, out);
+            }
+        }
+        Value::Attribute { data, attributes } => {
+            collect_cluster_shard_nodes(data, out);
+            for (_, item) in attributes {
+                collect_cluster_shard_nodes(item, out);
+            }
+        }
+        Value::Push { data, .. } => {
+            for item in data {
+                collect_cluster_shard_nodes(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_cluster_shard_node(value: &Value) -> Option<ClusterShardNode> {
+    let kv = kv_pairs(value)?;
+    let mut node_id = None;
+    let mut endpoint = None;
+    let mut hostname = None;
+    let mut ip = None;
+    let mut host = None;
+    let mut port = None;
+    let mut role = None;
+
+    for (k, v) in kv {
+        let key = value_to_string(k)?.to_ascii_lowercase();
+        match key.as_str() {
+            "id" => node_id = value_to_string(v),
+            "endpoint" => endpoint = value_to_string(v),
+            "hostname" => hostname = value_to_string(v),
+            "ip" => ip = value_to_string(v),
+            "host" => host = value_to_string(v),
+            "port" => port = value_to_u16(v),
+            "role" => role = value_to_string(v),
+            _ => {}
+        }
+    }
+
+    let host = [endpoint, hostname, ip, host]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty() && value != "?" && value != "-")?;
+    let port = port?;
+
+    Some(ClusterShardNode {
+        node_id,
+        addr: compose_addr(&host, port)?,
+        role: ClusterShardRole::from_value(role),
+    })
+}
+
+fn kv_pairs(value: &Value) -> Option<Vec<(&Value, &Value)>> {
+    match value {
+        Value::Map(entries) => Some(entries.iter().map(|(k, v)| (k, v)).collect()),
+        Value::Array(items) => {
+            if items.len() % 2 != 0 {
+                return None;
+            }
+            Some(
+                items
+                    .chunks_exact(2)
+                    .map(|chunk| (&chunk[0], &chunk[1]))
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::BulkString(bytes) => Some(String::from_utf8_lossy(bytes).to_string()),
+        Value::SimpleString(text) => Some(text.clone()),
+        Value::VerbatimString { text, .. } => Some(text.clone()),
+        Value::Int(num) => Some(num.to_string()),
+        Value::Double(num) => Some(num.to_string()),
+        Value::BigNumber(num) => Some(num.to_string()),
+        _ => None,
+    }
+}
+
+fn value_to_u16(value: &Value) -> Option<u16> {
+    match value {
+        Value::Int(num) => (*num).try_into().ok(),
+        _ => value_to_string(value)?.parse::<u16>().ok(),
+    }
+}
+
+fn compose_addr(host: &str, port: u16) -> Option<String> {
+    let mut trimmed = host.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(without_port) = strip_port_suffix(trimmed) {
+        trimmed = without_port;
+    }
+    if let Some(inner) = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        return Some(format!("[{inner}]:{port}"));
+    }
+    if trimmed.contains(':') {
+        return Some(format!("[{trimmed}]:{port}"));
+    }
+    Some(format!("{trimmed}:{port}"))
+}
+
+fn strip_port_suffix(host: &str) -> Option<&str> {
+    if let Some(inner) = host.strip_prefix('[') {
+        let (addr, suffix) = inner.split_once(']')?;
+        if suffix
+            .strip_prefix(':')
+            .map(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
+            .unwrap_or(false)
+        {
+            return Some(addr);
+        }
+        return None;
+    }
+
+    let (prefix, suffix) = host.rsplit_once(':')?;
+    if !prefix.contains(':') && !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(prefix);
+    }
+
+    None
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_cluster_nodes, parse_info};
+    use std::collections::BTreeSet;
+
+    use redis::Value;
+
+    use super::{collect_cluster_shard_addresses, parse_cluster_shards, parse_info};
 
     #[test]
     fn parses_info_sections_and_values() {
@@ -134,13 +331,116 @@ mod tests {
     }
 
     #[test]
-    fn parses_cluster_nodes_lines() {
-        let input = "07c37dfeb2352e66 127.0.0.1:7000@17000 master - 0 1426238317239 1 connected 0-5460\n3c3a1c6f8fd2b1f8 127.0.0.1:7003@17003 slave 07c37dfeb2352e66 0 1426238318240 4 connected\n";
-        let nodes = parse_cluster_nodes(input);
+    fn parses_cluster_shards_from_resp2_array_shape() {
+        let response = Value::Array(vec![Value::Array(vec![
+            Value::BulkString(b"slots".to_vec()),
+            Value::Array(vec![Value::Int(0), Value::Int(5460)]),
+            Value::BulkString(b"nodes".to_vec()),
+            Value::Array(vec![
+                Value::Array(vec![
+                    Value::BulkString(b"id".to_vec()),
+                    Value::BulkString(b"node-a".to_vec()),
+                    Value::BulkString(b"endpoint".to_vec()),
+                    Value::BulkString(b"10.0.0.11".to_vec()),
+                    Value::BulkString(b"port".to_vec()),
+                    Value::Int(7000),
+                    Value::BulkString(b"role".to_vec()),
+                    Value::BulkString(b"master".to_vec()),
+                ]),
+                Value::Array(vec![
+                    Value::BulkString(b"id".to_vec()),
+                    Value::BulkString(b"node-b".to_vec()),
+                    Value::BulkString(b"ip".to_vec()),
+                    Value::BulkString(b"10.0.0.12".to_vec()),
+                    Value::BulkString(b"port".to_vec()),
+                    Value::BulkString(b"7001".to_vec()),
+                    Value::BulkString(b"role".to_vec()),
+                    Value::BulkString(b"replica".to_vec()),
+                ]),
+            ]),
+        ])]);
 
-        assert_eq!(nodes.len(), 2);
-        assert!(nodes[0].is_master());
-        assert_eq!(nodes[1].master_id.as_deref(), Some("07c37dfeb2352e66"));
-        assert!(nodes[1].is_replica());
+        let shards = parse_cluster_shards(&response);
+        assert_eq!(shards.len(), 1);
+        assert_eq!(shards[0].nodes.len(), 2);
+        assert!(shards[0].nodes.iter().any(|node| node.is_primary()));
+        assert!(shards[0].nodes.iter().any(|node| node.is_replica()));
+    }
+
+    #[test]
+    fn parses_cluster_shards_from_resp3_map_shape() {
+        let response = Value::Array(vec![Value::Map(vec![
+            (
+                Value::BulkString(b"slots".to_vec()),
+                Value::Array(vec![Value::Int(0), Value::Int(5460)]),
+            ),
+            (
+                Value::BulkString(b"nodes".to_vec()),
+                Value::Array(vec![
+                    Value::Map(vec![
+                        (
+                            Value::BulkString(b"endpoint".to_vec()),
+                            Value::BulkString(b"2001:db8::1".to_vec()),
+                        ),
+                        (Value::BulkString(b"port".to_vec()), Value::Int(7000)),
+                        (
+                            Value::BulkString(b"role".to_vec()),
+                            Value::BulkString(b"master".to_vec()),
+                        ),
+                    ]),
+                    Value::Map(vec![
+                        (
+                            Value::BulkString(b"endpoint".to_vec()),
+                            Value::BulkString(b"?".to_vec()),
+                        ),
+                        (
+                            Value::BulkString(b"ip".to_vec()),
+                            Value::BulkString(b"10.0.0.20".to_vec()),
+                        ),
+                        (Value::BulkString(b"port".to_vec()), Value::Int(7002)),
+                        (
+                            Value::BulkString(b"role".to_vec()),
+                            Value::BulkString(b"replica".to_vec()),
+                        ),
+                    ]),
+                ]),
+            ),
+        ])]);
+
+        let mut found = BTreeSet::new();
+        for shard in parse_cluster_shards(&response) {
+            for node in shard.nodes {
+                found.insert(node.addr);
+            }
+        }
+
+        assert_eq!(
+            found.into_iter().collect::<Vec<_>>(),
+            vec![
+                "10.0.0.20:7002".to_string(),
+                "[2001:db8::1]:7000".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extracts_cluster_shard_addresses_without_double_port() {
+        let response = Value::Array(vec![Value::Map(vec![(
+            Value::BulkString(b"nodes".to_vec()),
+            Value::Array(vec![Value::Map(vec![
+                (
+                    Value::BulkString(b"endpoint".to_vec()),
+                    Value::BulkString(b"10.0.0.30:7005".to_vec()),
+                ),
+                (Value::BulkString(b"port".to_vec()), Value::Int(7005)),
+            ])]),
+        )])]);
+
+        assert_eq!(
+            collect_cluster_shard_addresses(&response)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["10.0.0.30:7005".to_string()]
+        );
     }
 }
