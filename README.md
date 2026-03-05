@@ -79,6 +79,26 @@ reditop --version
 # reditop x.y.z [YYYY-MM-DD] (<gitsha>[-dirty])
 ```
 
+## Building a static musl binary
+
+Install the musl target once:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+```
+
+Then build a release binary with:
+
+```bash
+cargo build-musl
+```
+
+Output binary:
+
+```bash
+target/x86_64-unknown-linux-musl/release/reditop
+```
+
 ## Config
 
 Search order when `--config` is not provided:

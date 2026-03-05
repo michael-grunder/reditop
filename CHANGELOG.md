@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.
+- Added Cargo musl build target alias: `cargo build-musl` builds a release `x86_64-unknown-linux-musl` binary for portable static deployment.
 - Added polling engine with bounded concurrency, latency window tracking, and per-instance status/error handling.
 - Added INFO and CLUSTER NODES parsing with unit tests.
 - Added topology builder for tree view grouping with replication parent/child mapping and tests.
