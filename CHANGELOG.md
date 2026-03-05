@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added TOML config loader with default path discovery and validation for missing/invalid targets.
 - Added project `README.md` with usage, key bindings, CLI examples, and config schema.
 - Added `build.rs`-driven version metadata so `--version` includes build date and git SHA (`-dirty` when applicable).
+- Added a dedicated full-screen help page opened with `H`, including key/action descriptions.
 ### Changed
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).

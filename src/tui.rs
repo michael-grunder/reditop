@@ -80,6 +80,7 @@ async fn run_loop(
 
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
+                KeyCode::Char('H') => app.open_help_view(),
                 KeyCode::Char('?') => app.show_help = !app.show_help,
                 KeyCode::Char('t') if app.active_view == ActiveView::Overview => {
                     app.view_mode = app.view_mode.toggle();
@@ -95,8 +96,8 @@ async fn run_loop(
                 KeyCode::Char('r') => {
                     let _ = refresh_tx.try_send(());
                 }
-                KeyCode::Up => app.move_selection(-1),
-                KeyCode::Down => app.move_selection(1),
+                KeyCode::Up if app.active_view == ActiveView::Overview => app.move_selection(-1),
+                KeyCode::Down if app.active_view == ActiveView::Overview => app.move_selection(1),
                 KeyCode::Enter if app.active_view == ActiveView::Overview => {
                     if app.selected_key().is_some() {
                         app.active_view = ActiveView::Detail;
@@ -105,6 +106,7 @@ async fn run_loop(
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
                     app.active_view = ActiveView::Overview
                 }
+                KeyCode::Esc if app.active_view == ActiveView::Help => app.close_help_view(),
                 KeyCode::Tab | KeyCode::Right if app.active_view == ActiveView::Detail => {
                     app.detail_tab = (app.detail_tab + 1) % 3;
                 }
@@ -123,6 +125,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     match app.active_view {
         ActiveView::Overview => draw_overview(frame, app),
         ActiveView::Detail => draw_detail(frame, app),
+        ActiveView::Help => draw_help_page(frame),
     }
 
     if app.show_help {
@@ -417,6 +420,39 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+fn draw_help_page(frame: &mut ratatui::Frame<'_>) {
+    let rows: Vec<Row<'_>> = help_bindings()
+        .iter()
+        .map(|(keys, action)| Row::new(vec![Cell::from(*keys), Cell::from(*action)]))
+        .collect();
+    let table = Table::new(rows, [Constraint::Length(24), Constraint::Min(20)])
+        .header(Row::new(vec!["Keys", "Action"]).style(Style::default().add_modifier(Modifier::BOLD)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Help (Esc to go back)"),
+        );
+    frame.render_widget(table, frame.area());
+}
+
+fn help_bindings() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("q", "Quit"),
+        ("H", "Open this help page"),
+        ("Esc", "Back from detail/help or stop filter editing"),
+        ("Enter", "Open detail view from overview"),
+        ("Tab/Right", "Next detail panel"),
+        ("Left", "Previous detail panel"),
+        ("Up/Down", "Move selection in overview"),
+        ("?", "Toggle help overlay"),
+        ("r", "Refresh now"),
+        ("t", "Toggle flat/tree view in overview"),
+        ("s", "Cycle sort mode in overview"),
+        ("/", "Start filter input in overview"),
+        ("Backspace", "Delete filter character while editing"),
+    ]
+}
+
 fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let width = area.width.saturating_mul(80) / 100;
     let height = area.height.saturating_mul(70) / 100;
@@ -428,7 +464,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quit\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help\nr refresh now\nt toggle flat/tree\ns toggle sort\n/ filter in overview";
+    let text = "q quit\nH open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nt toggle flat/tree\ns toggle sort\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title("Help"))
@@ -454,7 +490,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{format_aligned_rows, format_with_commas};
+    use super::{format_aligned_rows, format_with_commas, help_bindings};
 
     #[test]
     fn format_with_commas_groups_digits() {
@@ -468,5 +504,10 @@ mod tests {
     fn format_aligned_rows_uses_consistent_label_column() {
         let body = format_aligned_rows(&[("a", "1".to_string()), ("long_name", "2".to_string())]);
         assert_eq!(body, "a         : 1\nlong_name : 2");
+    }
+
+    #[test]
+    fn help_bindings_include_help_page_shortcut() {
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "H"));
     }
 }

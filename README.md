@@ -23,10 +23,11 @@
 ## Key Bindings
 
 - `q`: quit
+- `H`: open full help page
 - `?`: toggle help
 - `Up/Down`: move selection
 - `Enter`: open detail
-- `Esc`: back to overview
+- `Esc`: back to previous view (or stop filter editing)
 - `Tab` / `Left` / `Right`: cycle detail tabs
 - `t`: toggle tree/flat
 - `s`: cycle sort mode

@@ -7,6 +7,7 @@ use crate::topology::build_tree_groups;
 pub enum ActiveView {
     Overview,
     Detail,
+    Help,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +34,7 @@ pub struct AppState {
     pub is_filtering: bool,
     pub show_help: bool,
     pub active_view: ActiveView,
+    pub previous_view: ActiveView,
     pub selected_index: usize,
     pub detail_tab: usize,
     pub instances: HashMap<String, InstanceState>,
@@ -49,6 +51,7 @@ impl AppState {
             is_filtering: false,
             show_help: false,
             active_view: ActiveView::Overview,
+            previous_view: ActiveView::Overview,
             selected_index: 0,
             detail_tab: 0,
             instances: HashMap::new(),
@@ -86,6 +89,17 @@ impl AppState {
         } else if self.selected_index >= len {
             self.selected_index = len - 1;
         }
+    }
+
+    pub fn open_help_view(&mut self) {
+        if self.active_view != ActiveView::Help {
+            self.previous_view = self.active_view;
+        }
+        self.active_view = ActiveView::Help;
+    }
+
+    pub fn close_help_view(&mut self) {
+        self.active_view = self.previous_view;
     }
 
     pub fn visible_rows(&self) -> Vec<DisplayRow> {
