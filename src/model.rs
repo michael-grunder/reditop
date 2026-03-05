@@ -181,15 +181,6 @@ impl InstanceState {
         }
     }
 
-    pub fn maxmemory_percent(&self) -> Option<f64> {
-        let used = self.used_memory_bytes?;
-        let max = self.maxmemory_bytes?;
-        if max == 0 {
-            return None;
-        }
-        Some((used as f64 / max as f64) * 100.0)
-    }
-
     pub fn is_stale(&self, refresh_interval: Duration) -> bool {
         self.last_updated
             .map(|ts| ts.elapsed() > refresh_interval.saturating_mul(2))

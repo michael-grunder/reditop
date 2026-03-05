@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overview rows now use compact type labels (`PRI`, `REP`, `CLU`, `STD`) and narrower Type/Cluster columns.
 - Cluster column now shows logical cluster IDs (`1`, `2`, ...) mapped from distinct discovered clusters instead of raw node IDs.
 - Tree view replica branch markers no longer include a leading left padding before `└─`/`├─`.
+- Overview memory display now uses one `Memory` column that shows `used/maxmemory` when maxmemory is configured, otherwise just `used`.
 ### Deprecated
 ### Removed
 ### Fixed

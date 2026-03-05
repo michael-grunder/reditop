@@ -9,8 +9,7 @@
   - alias/address
   - type
   - cluster group
-  - used memory
-  - maxmemory percentage
+  - memory usage (`used` or `used/maxmemory` when configured)
   - ops/sec
   - last/max latency
   - status

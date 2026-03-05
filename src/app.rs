@@ -19,8 +19,7 @@ pub struct DisplayRow {
     pub address: String,
     pub node_type: String,
     pub cluster: String,
-    pub mem_used: String,
-    pub maxmem_pct: String,
+    pub memory: String,
     pub ops: String,
     pub lat_last: String,
     pub lat_max: String,
@@ -261,14 +260,7 @@ impl AppState {
                 .get(&raw_cluster)
                 .cloned()
                 .unwrap_or_else(|| "?".to_string()),
-            mem_used: node
-                .used_memory_bytes
-                .map(human_bytes)
-                .unwrap_or_else(|| "-".to_string()),
-            maxmem_pct: node
-                .maxmemory_percent()
-                .map(|pct| format!("{pct:.1}%"))
-                .unwrap_or_default(),
+            memory: format_memory_usage(node.used_memory_bytes, node.maxmemory_bytes),
             ops: node
                 .ops_per_sec
                 .map(|v| v.to_string())
@@ -400,6 +392,17 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+fn format_memory_usage(used_bytes: Option<u64>, max_bytes: Option<u64>) -> String {
+    let Some(used) = used_bytes else {
+        return "-".to_string();
+    };
+    let used_human = human_bytes(used);
+    match max_bytes {
+        Some(max) if max > 0 => format!("{used_human}/{}", human_bytes(max)),
+        _ => used_human,
+    }
+}
+
 fn shorten_addr(addr: &str) -> &str {
     addr.rsplit('/').next().unwrap_or(addr)
 }
@@ -422,7 +425,7 @@ fn compact_instance_type(kind: InstanceType) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::AppState;
+    use super::{AppState, format_memory_usage};
     use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
     use std::collections::HashMap;
     use std::time::Duration;
@@ -523,5 +526,16 @@ mod tests {
         assert!(app.show_address_column());
         let rows = app.visible_rows();
         assert_eq!(rows[0].alias_or_addr, "127.0.0.1:6379");
+    }
+
+    #[test]
+    fn memory_display_uses_single_column_with_optional_max() {
+        assert_eq!(
+            format_memory_usage(Some(1024 * 1024 * 2), Some(1024 * 1024 * 4)),
+            "2.0 MiB/4.0 MiB"
+        );
+        assert_eq!(format_memory_usage(Some(1024 * 2), Some(0)), "2.0 KiB");
+        assert_eq!(format_memory_usage(Some(1024 * 2), None), "2.0 KiB");
+        assert_eq!(format_memory_usage(None, Some(1024 * 2)), "-");
     }
 }

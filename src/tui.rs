@@ -182,8 +182,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             cells.extend([
                 Cell::from(row.node_type.clone()),
                 Cell::from(row.cluster.clone()),
-                Cell::from(row.mem_used.clone()),
-                Cell::from(row.maxmem_pct.clone()),
+                Cell::from(row.memory.clone()),
                 Cell::from(row.ops.clone()),
                 Cell::from(row.lat_last.clone()),
                 Cell::from(row.lat_max.clone()),
@@ -205,8 +204,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             Constraint::Length(21),
             Constraint::Length(6),
             Constraint::Length(7),
-            Constraint::Length(11),
-            Constraint::Length(8),
+            Constraint::Length(20),
             Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(8),
@@ -217,8 +215,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             Constraint::Length(33),
             Constraint::Length(6),
             Constraint::Length(7),
-            Constraint::Length(11),
-            Constraint::Length(8),
+            Constraint::Length(20),
             Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(8),
@@ -228,12 +225,11 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
 
     let header = if show_address {
         Row::new(vec![
-            "Alias", "Address", "Type", "Cluster", "Mem", "Max%", "Ops/s", "Lat", "LatMax",
-            "Status",
+            "Alias", "Address", "Type", "Cluster", "Memory", "Ops/s", "Lat", "LatMax", "Status",
         ])
     } else {
         Row::new(vec![
-            "Alias", "Type", "Cluster", "Mem", "Max%", "Ops/s", "Lat", "LatMax", "Status",
+            "Alias", "Type", "Cluster", "Memory", "Ops/s", "Lat", "LatMax", "Status",
         ])
     };
 
