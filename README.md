@@ -31,6 +31,7 @@
 - `Tab` / `Left` / `Right`: cycle detail tabs
 - `t`: toggle tree/flat
 - `s`: cycle sort mode
+- `h`: toggle host rendering (default auto-hides host when all targets share one host)
 - `/`: start filter input
 - `r`: refresh now
 

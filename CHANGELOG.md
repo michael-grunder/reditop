@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated CLI binary name/docs to `reditop`.
 - Updated detail view metric rendering to aligned key/value columns with thousands-separated numeric formatting for readability.
 - Tree view rendering now shows primaries as top-level rows and indents replicas beneath their assigned primary.
-- Overview table now omits the Address column automatically when all visible instances are localhost targets.
+- Overview table now omits host rendering by default when all monitored targets share the same host, with runtime toggle `h` to force showing hosts.
 - Overview rows now use compact type labels (`PRI`, `REP`, `CLU`, `STD`) and narrower Type/Cluster columns.
 - Cluster column now shows logical cluster IDs (`1`, `2`, ...) mapped from distinct discovered clusters instead of raw node IDs.
 - Tree view replica branch markers no longer include a leading left padding before `└─`/`├─`.

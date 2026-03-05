@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
-use crate::target_addr::is_local_address;
+use crate::target_addr::{canonical_host, strip_host};
 use crate::topology::{TreeGroup, build_tree_groups};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,7 @@ pub struct AppState {
     pub previous_view: ActiveView,
     pub selected_index: usize,
     pub detail_tab: usize,
+    pub force_show_host: bool,
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
 }
@@ -62,6 +63,7 @@ impl AppState {
             previous_view: ActiveView::Overview,
             selected_index: 0,
             detail_tab: 0,
+            force_show_host: false,
             instances: HashMap::new(),
             should_quit: false,
         }
@@ -114,32 +116,32 @@ impl AppState {
         let mut nodes: Vec<&InstanceState> = self.instances.values().collect();
         nodes.retain(|node| self.matches_filter(node));
         let cluster_labels = self.cluster_labels();
+        let should_omit_host = self.should_omit_host_in_rendering();
 
         match self.view_mode {
             ViewMode::Flat => {
                 sort_instances(&mut nodes, self.sort_mode);
                 nodes
                     .into_iter()
-                    .map(|node| self.to_display_row(node, "", &cluster_labels))
+                    .map(|node| self.to_display_row(node, "", should_omit_host, &cluster_labels))
                     .collect()
             }
-            ViewMode::Tree => self.build_tree_rows(nodes, &cluster_labels),
+            ViewMode::Tree => self.build_tree_rows(nodes, should_omit_host, &cluster_labels),
         }
     }
 
     pub fn show_address_column(&self) -> bool {
-        if self.instances.is_empty() {
-            return true;
-        }
+        !self.should_omit_host_in_rendering()
+    }
 
-        self.instances
-            .values()
-            .any(|instance| !is_local_address(&instance.addr))
+    pub fn toggle_host_rendering(&mut self) {
+        self.force_show_host = !self.force_show_host;
     }
 
     fn build_tree_rows(
         &self,
         filtered_nodes: Vec<&InstanceState>,
+        should_omit_host: bool,
         cluster_labels: &HashMap<String, String>,
     ) -> Vec<DisplayRow> {
         let mut filtered_map: HashMap<String, &InstanceState> = HashMap::new();
@@ -165,8 +167,15 @@ impl AppState {
 
             for root in roots {
                 rendered.insert(root.key.clone());
-                out.push(self.to_display_row(root, "", cluster_labels));
-                self.append_tree_children(&mut out, &ctx, &root.key, "", &mut rendered);
+                out.push(self.to_display_row(root, "", should_omit_host, cluster_labels));
+                self.append_tree_children(
+                    &mut out,
+                    &ctx,
+                    &root.key,
+                    "",
+                    should_omit_host,
+                    &mut rendered,
+                );
             }
         }
 
@@ -179,6 +188,7 @@ impl AppState {
         ctx: &TreeRenderCtx<'_>,
         parent_key: &str,
         indent: &str,
+        should_omit_host: bool,
         rendered: &mut HashSet<String>,
     ) {
         let mut children: Vec<&InstanceState> = ctx
@@ -202,14 +212,26 @@ impl AppState {
 
             let is_last = idx + 1 == children.len();
             let branch = if is_last { "└─ " } else { "├─ " };
-            out.push(self.to_display_row(child, &format!("{indent}{branch}"), ctx.cluster_labels));
+            out.push(self.to_display_row(
+                child,
+                &format!("{indent}{branch}"),
+                should_omit_host,
+                ctx.cluster_labels,
+            ));
 
             let next_indent = if is_last {
                 format!("{indent}   ")
             } else {
                 format!("{indent}│  ")
             };
-            self.append_tree_children(out, ctx, &child.key, &next_indent, rendered);
+            self.append_tree_children(
+                out,
+                ctx,
+                &child.key,
+                &next_indent,
+                should_omit_host,
+                rendered,
+            );
         }
     }
 
@@ -217,12 +239,13 @@ impl AppState {
         &self,
         node: &InstanceState,
         prefix: &str,
+        should_omit_host: bool,
         cluster_labels: &HashMap<String, String>,
     ) -> DisplayRow {
         let alias = node
             .alias
             .clone()
-            .unwrap_or_else(|| shorten_addr(&node.addr).to_string());
+            .unwrap_or_else(|| default_row_label(&node.addr, should_omit_host));
         let alias_or_addr = format!("{prefix}{alias}");
         let raw_cluster = node
             .cluster_id
@@ -297,6 +320,21 @@ impl AppState {
             .map(|(idx, raw_cluster)| (raw_cluster.clone(), (idx + 1).to_string()))
             .collect()
     }
+
+    pub fn should_omit_host_in_rendering(&self) -> bool {
+        if self.force_show_host || self.instances.is_empty() {
+            return false;
+        }
+
+        let mut hosts = self
+            .instances
+            .values()
+            .map(|instance| canonical_host(&instance.addr));
+        let Some(Some(first)) = hosts.next() else {
+            return false;
+        };
+        hosts.all(|host| host.as_deref() == Some(first.as_str()))
+    }
 }
 
 fn sort_instances(instances: &mut Vec<&InstanceState>, mode: SortMode) {
@@ -364,6 +402,13 @@ fn human_bytes(bytes: u64) -> String {
 
 fn shorten_addr(addr: &str) -> &str {
     addr.rsplit('/').next().unwrap_or(addr)
+}
+
+fn default_row_label(addr: &str, omit_host: bool) -> String {
+    if omit_host && let Some(without_host) = strip_host(addr) {
+        return without_host;
+    }
+    shorten_addr(addr).to_string()
 }
 
 fn compact_instance_type(kind: InstanceType) -> &'static str {
@@ -442,18 +487,41 @@ mod tests {
     }
 
     #[test]
-    fn hides_address_column_when_all_instances_are_local() {
+    fn hides_address_column_when_all_instance_hosts_are_equal() {
         let mut app = AppState::new(settings());
-        app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
-        app.apply_update(InstanceState::new("b".into(), "localhost:6380".into()));
+        app.apply_update(InstanceState::new("a".into(), "10.0.0.12:6379".into()));
+        app.apply_update(InstanceState::new("b".into(), "10.0.0.12:6380".into()));
         assert!(!app.show_address_column());
     }
 
     #[test]
-    fn keeps_address_column_when_any_instance_is_remote() {
+    fn keeps_address_column_when_instance_hosts_are_mixed() {
         let mut app = AppState::new(settings());
         app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
         app.apply_update(InstanceState::new("b".into(), "10.0.0.12:6380".into()));
         assert!(app.show_address_column());
+    }
+
+    #[test]
+    fn default_label_omits_host_when_all_hosts_match() {
+        let mut app = AppState::new(settings());
+        app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
+        app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
+
+        let rows = app.visible_rows();
+        assert_eq!(rows[0].alias_or_addr, "6379");
+        assert_eq!(rows[1].alias_or_addr, "6380");
+    }
+
+    #[test]
+    fn force_show_host_override_keeps_address_column_visible() {
+        let mut app = AppState::new(settings());
+        app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
+        app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
+        app.toggle_host_rendering();
+
+        assert!(app.show_address_column());
+        let rows = app.visible_rows();
+        assert_eq!(rows[0].alias_or_addr, "127.0.0.1:6379");
     }
 }

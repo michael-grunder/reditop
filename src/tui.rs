@@ -90,6 +90,10 @@ async fn run_loop(
                     app.sort_mode = app.sort_mode.next();
                     app.clamp_selection();
                 }
+                KeyCode::Char('h') if app.active_view == ActiveView::Overview => {
+                    app.toggle_host_rendering();
+                    app.clamp_selection();
+                }
                 KeyCode::Char('/') if app.active_view == ActiveView::Overview => {
                     app.is_filtering = true
                 }
@@ -145,10 +149,17 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         .split(area);
 
     let header = Paragraph::new(format!(
-        "redis-top  refresh={}  view={:?}  sort={:?}  filter={}{}",
+        "redis-top  refresh={}  view={:?}  sort={:?}  host={}  filter={}{}",
         humantime::format_duration(app.settings.refresh_interval),
         app.view_mode,
         app.sort_mode,
+        if app.force_show_host {
+            "shown"
+        } else if app.should_omit_host_in_rendering() {
+            "omitted(auto)"
+        } else {
+            "shown(auto)"
+        },
         if app.filter.is_empty() {
             "<none>"
         } else {
@@ -477,6 +488,10 @@ fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ("r", "Refresh now"),
         ("t", "Toggle flat/tree view in overview"),
         ("s", "Cycle sort mode in overview"),
+        (
+            "h",
+            "Toggle host rendering (auto hide when all hosts are the same)",
+        ),
         ("/", "Start filter input in overview"),
         ("Backspace", "Delete filter character while editing"),
     ]
@@ -493,7 +508,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quit\nH open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nt toggle flat/tree\ns toggle sort\n/ filter in overview";
+    let text = "q quit\nH open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nt toggle flat/tree\ns toggle sort\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title("Help"))

@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 
 use anyhow::{Context, Result};
 
@@ -10,26 +10,43 @@ pub fn normalize_tcp_addr(raw: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-pub fn is_local_address(addr: &str) -> bool {
+pub fn canonical_host(addr: &str) -> Option<String> {
     if addr.contains('/') {
-        return true;
+        return None;
     }
 
-    if let Ok(socket) = addr.parse::<SocketAddr>() {
-        return socket.ip().is_loopback();
+    let host = extract_host(addr)?;
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    Some(host.to_ascii_lowercase())
+}
+
+pub fn strip_host(addr: &str) -> Option<String> {
+    if addr.contains('/') {
+        return None;
     }
 
-    let Some(host) = extract_host(addr) else {
-        return false;
-    };
-
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
+    if let Some(rest) = addr.strip_prefix('[') {
+        let (_, suffix) = rest.split_once(']')?;
+        if suffix.is_empty() {
+            return Some(addr.to_string());
+        }
+        return suffix.strip_prefix(':').map(str::to_string);
     }
 
-    host.parse::<IpAddr>()
-        .map(|ip| ip.is_loopback())
-        .unwrap_or(false)
+    if let Some((_, port)) = addr.rsplit_once(':')
+        && !port.is_empty()
+        && port.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(port.to_string());
+    }
+
+    if !addr.contains(':') {
+        return Some(addr.to_string());
+    }
+
+    None
 }
 
 fn parse_port_only(raw: &str) -> Result<Option<u16>> {
@@ -82,7 +99,7 @@ fn extract_host(addr: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_local_address, normalize_tcp_addr};
+    use super::{canonical_host, normalize_tcp_addr, strip_host};
 
     #[test]
     fn normalizes_port_only_targets() {
@@ -101,11 +118,22 @@ mod tests {
     }
 
     #[test]
-    fn detects_local_addresses() {
-        assert!(is_local_address("127.0.0.1:6379"));
-        assert!(is_local_address("localhost:6379"));
-        assert!(is_local_address("[::1]:6379"));
-        assert!(is_local_address("/tmp/redis.sock"));
-        assert!(!is_local_address("10.0.0.12:6379"));
+    fn canonicalizes_hosts_for_comparison() {
+        assert_eq!(
+            canonical_host("LOCALHOST:6379"),
+            Some("localhost".to_string())
+        );
+        assert_eq!(
+            canonical_host("127.0.0.1:6379"),
+            Some("127.0.0.1".to_string())
+        );
+        assert_eq!(canonical_host("/tmp/redis.sock"), None);
+    }
+
+    #[test]
+    fn strips_host_from_host_port_addresses() {
+        assert_eq!(strip_host("localhost:6379"), Some("6379".to_string()));
+        assert_eq!(strip_host("[::1]:6380"), Some("6380".to_string()));
+        assert_eq!(strip_host("/tmp/redis.sock"), None);
     }
 }
