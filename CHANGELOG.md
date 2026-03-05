@@ -49,3 +49,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed tree view dropping replicas when their `parent_addr` did not exactly match a primary key; parent lookup now resolves by key or address and keeps unresolved replicas visible.
 - Fixed topology grouping that could flatten replication trees by splitting related nodes into separate groups.
 - Fixed TCP target parsing to accept port-only values (for example `6379`) as `127.0.0.1:6379` in both CLI and config.
+- Fixed overview header cell rendering to use the same width and alignment formatting as row cells so column headers stay aligned with their data.

@@ -252,14 +252,15 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         })
         .collect();
 
-    let constraints: Vec<Constraint> = widths.into_iter().map(Constraint::Length).collect();
+    let constraints: Vec<Constraint> = widths.iter().copied().map(Constraint::Length).collect();
     let header = Row::new(
         columns
             .iter()
             .zip(column_keys.iter())
-            .map(|(column, key)| {
+            .zip(widths.iter())
+            .map(|((column, key), width)| {
                 let label = sortable_header(column.header(), app, key);
-                Cell::from(label)
+                Cell::from(fit_cell_text(&label, *width as usize, column.align()))
             })
             .collect::<Vec<Cell<'_>>>(),
     )
@@ -805,7 +806,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{format_aligned_rows, format_with_commas, help_bindings};
+    use super::{Align, fit_cell_text, format_aligned_rows, format_with_commas, help_bindings};
 
     #[test]
     fn format_with_commas_groups_digits() {
@@ -833,5 +834,11 @@ mod tests {
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F4"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F5"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F6"));
+    }
+
+    #[test]
+    fn fit_cell_text_right_aligns_headers_and_values_consistently() {
+        assert_eq!(fit_cell_text("Ops/s", 8, Align::Right), "   Ops/s");
+        assert_eq!(fit_cell_text("123", 8, Align::Right), "     123");
     }
 }
