@@ -7,6 +7,15 @@ use clap::{Parser, ValueEnum};
 use crate::config;
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
 
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " [",
+    env!("REDITOP_BUILD_DATE"),
+    "] (",
+    env!("REDITOP_GIT_SHA"),
+    ")"
+);
+
 #[derive(Debug, Clone)]
 pub struct LaunchConfig {
     pub settings: RuntimeSettings,
@@ -15,7 +24,11 @@ pub struct LaunchConfig {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "redis-top", version, about = "htop-like TUI for Redis/Valkey")]
+#[command(
+    name = "reditop",
+    version = VERSION,
+    about = "htop-like TUI for Redis/Valkey"
+)]
 struct Cli {
     #[arg(value_name = "TARGETS")]
     targets: Vec<String>,
@@ -199,4 +212,17 @@ fn dedupe_targets(input: Vec<Target>) -> Vec<Target> {
     let mut out: Vec<Target> = by_key.into_values().collect();
     out.sort_by(|a, b| a.addr.cmp(&b.addr));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VERSION;
+
+    #[test]
+    fn version_string_contains_build_metadata() {
+        assert!(VERSION.starts_with(env!("CARGO_PKG_VERSION")));
+        assert!(VERSION.contains(" ["));
+        assert!(VERSION.contains("] ("));
+        assert!(VERSION.ends_with(')'));
+    }
 }

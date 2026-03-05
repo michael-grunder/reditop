@@ -1,6 +1,6 @@
-# redis-top
+# reditop
 
-`redis-top` is a terminal UI for monitoring Redis/Valkey instances.
+`reditop` is a terminal UI for monitoring Redis/Valkey instances.
 
 ## Implemented MVP
 
@@ -38,10 +38,10 @@
 Examples:
 
 ```bash
-redis-top 127.0.0.1:6379 127.0.0.1:6380
-redis-top --unix /tmp/redis.sock --tcp 10.0.0.12:6379
-redis-top --config ~/.config/redis-top/config.toml
-redis-top -c config.toml 127.0.0.1:6379
+reditop 127.0.0.1:6379 127.0.0.1:6380
+reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
+reditop --config ~/.config/redis-top/config.toml
+reditop -c config.toml 127.0.0.1:6379
 ```
 
 Important options:
@@ -57,6 +57,13 @@ Important options:
 - `-a, --auth <PASSWORD>`
 - `--user <USERNAME>`
 - `-v, --verbose`
+
+Version output includes build metadata:
+
+```bash
+reditop --version
+# reditop x.y.z [YYYY-MM-DD] (<gitsha>[-dirty])
+```
 
 ## Config
 

@@ -14,9 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added clap-based CLI with target parsing, duration/timeouts, sort/view toggles, auth/user overrides, and config merge behavior.
 - Added TOML config loader with default path discovery and validation for missing/invalid targets.
 - Added project `README.md` with usage, key bindings, CLI examples, and config schema.
+- Added `build.rs`-driven version metadata so `--version` includes build date and git SHA (`-dirty` when applicable).
 ### Changed
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
+- Updated CLI binary name/docs to `reditop`.
 ### Deprecated
 ### Removed
 ### Fixed
