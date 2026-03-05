@@ -1,5 +1,16 @@
-#![warn(clippy::all, clippy::nursery, clippy::pedantic)]
+mod app;
+mod cli;
+mod config;
+mod model;
+mod parse;
+mod poller;
+mod topology;
+mod tui;
 
-fn main() {
-    println!("Hello, world!");
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let launch = cli::build_launch_config()?;
+    tui::run(launch).await
 }
