@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod cluster;
 mod config;
 mod model;
 mod parse;
@@ -12,6 +13,6 @@ use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let launch = cli::build_launch_config()?;
+    let launch = cli::build_launch_config().await?;
     tui::run(launch).await
 }

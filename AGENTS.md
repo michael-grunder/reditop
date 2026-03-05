@@ -4,6 +4,9 @@
   performance reason for it.
 * Prefer defensive programming. Never ignore return values when they can fail
   unless there is a compelling reason (rarely we may not care about a failure).
+* Make sure to use Rust's best features where appropriate, for example traits
+  and generics to abstract over different implementations of current and future
+  functionality.
 * Prefer using idiomatic cargo packages  rather than rolling our own unless
   there is a compelling reason.
 * When adding features never just tack them on to existing code and pepper

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `build.rs`-driven version metadata so `--version` includes build date and git SHA (`-dirty` when applicable).
 - Added a dedicated full-screen help page opened with `H`, including key/action descriptions.
 - Added htop-style bottom key bar with function key labels: `F1 Help`, `F3 Search`, `F4 Filter`, `F5 Tree`, `F6 SortBy`.
+- Added `--cluster <HOST:PORT>` CLI option to seed cluster auto-discovery and monitor all discovered primary/replica nodes.
 ### Changed
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
@@ -31,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overview now shows live user input in the bottom status bar while search/filter editing is active.
 - Added function-key aliases for existing overview actions (`F1` help, `F5` view toggle, `F6` sort cycle) and wired `F3`/`F4` into search/filter input entry.
 - Reworked overview sorting: `F6` now opens a selector built from currently displayed columns, sorting supports explicit direction, and the active header shows an `↑`/`↓` indicator.
+- Launch configuration now performs startup cluster-node expansion via `CLUSTER SHARDS` for `--cluster` seeds, then merges/disambiguates discovered targets with existing CLI/config targets.
 ### Deprecated
 ### Removed
 ### Fixed

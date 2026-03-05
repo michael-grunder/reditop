@@ -48,12 +48,19 @@ Examples:
 reditop 127.0.0.1:6379 127.0.0.1:6380
 reditop 6379 6380
 reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
+reditop --cluster 7000
+reditop --cluster 10.0.0.11:7000 --cluster 10.0.0.12:7000
 reditop --config ~/.config/redis-top/config.toml
 reditop -c config.toml 127.0.0.1:6379
 ```
 
 For TCP targets, you can pass just a port (for example `6379`), and it is treated as
 `127.0.0.1:6379`.
+
+`--cluster <HOST:PORT>` uses the provided TCP seed node(s) to run `CLUSTER SHARDS`
+and auto-discover every primary/replica endpoint in the cluster for monitoring.
+Like `--tcp`, a port-only value such as `--cluster 7000` is treated as
+`127.0.0.1:7000`.
 
 Important options:
 
@@ -62,6 +69,7 @@ Important options:
 - `--connect-timeout <DURATION>`
 - `--command-timeout <DURATION>`
 - `-n, --concurrency <N>`
+- `--cluster <HOST:PORT>`
 - `--view <flat|tree>`
 - `--sort <alias|address|type|cluster|memory|mem|ops|lat|latmax|status>`
 - `--no-config`

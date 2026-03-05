@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use clap::{Parser, ValueEnum};
 
+use crate::cluster;
 use crate::config;
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
 use crate::target_addr::normalize_tcp_addr;
@@ -39,6 +40,9 @@ struct Cli {
 
     #[arg(long = "tcp", value_name = "HOST:PORT")]
     tcp_targets: Vec<String>,
+
+    #[arg(long = "cluster", value_name = "HOST:PORT")]
+    cluster_targets: Vec<String>,
 
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
@@ -94,7 +98,7 @@ enum CliSortMode {
     Status,
 }
 
-pub fn build_launch_config() -> Result<LaunchConfig> {
+pub async fn build_launch_config() -> Result<LaunchConfig> {
     let args = Cli::parse();
 
     let base_settings = config::default_settings();
@@ -163,6 +167,21 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
             tags: Vec::new(),
         })
     }));
+    let mut parsed_cluster_seeds: Vec<Target> = args
+        .cluster_targets
+        .into_iter()
+        .map(|raw| {
+            let addr = normalize_tcp_addr(&raw)?;
+            Ok(Target {
+                alias: None,
+                addr,
+                protocol: TargetProtocol::Tcp,
+                username: args.user.clone(),
+                password: args.auth.clone(),
+                tags: Vec::new(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     for item in &mut merged_targets {
         if item.username.is_none() {
@@ -182,6 +201,21 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
             parsed.password = args.auth.clone();
         }
         merged_targets.push(parsed);
+    }
+
+    for seed in &mut parsed_cluster_seeds {
+        if seed.username.is_none() {
+            seed.username = args.user.clone();
+        }
+        if seed.password.is_none() {
+            seed.password = args.auth.clone();
+        }
+    }
+
+    if !parsed_cluster_seeds.is_empty() {
+        let discovered =
+            cluster::discover_cluster_targets(&parsed_cluster_seeds, &settings).await?;
+        merged_targets.extend(discovered);
     }
 
     merged_targets = dedupe_targets(merged_targets);
