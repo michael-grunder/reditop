@@ -121,7 +121,7 @@ async fn poll_one(
             .iter()
             .find(|node| node.is_myself() || node.addr == target.addr)
         {
-            state.cluster_id = Some(myself.node_id.chars().take(8).collect());
+            state.cluster_id = cluster_signature(&nodes);
             if myself.is_replica() {
                 state.kind = InstanceType::Replica;
                 state.parent_addr = myself
@@ -275,4 +275,30 @@ fn truncate_string(input: String, max_chars: usize) -> String {
         return input;
     }
     input.chars().take(max_chars).collect()
+}
+
+fn cluster_signature(nodes: &[crate::parse::ClusterNode]) -> Option<String> {
+    let mut ids: Vec<&str> = nodes.iter().map(|node| node.node_id.as_str()).collect();
+    ids.sort_unstable();
+    ids.first().map(|id| (*id).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cluster_signature;
+    use crate::parse::parse_cluster_nodes;
+
+    #[test]
+    fn cluster_signature_is_stable_for_same_membership() {
+        let input_a = "bbbb 127.0.0.1:6380@16380 master - 0 0 1 connected\n\
+                       aaaa 127.0.0.1:6379@16379 myself,master - 0 0 1 connected\n";
+        let input_b = "aaaa 127.0.0.1:6379@16379 master - 0 0 1 connected\n\
+                       bbbb 127.0.0.1:6380@16380 myself,master - 0 0 1 connected\n";
+
+        let nodes_a = parse_cluster_nodes(input_a);
+        let nodes_b = parse_cluster_nodes(input_b);
+
+        assert_eq!(cluster_signature(&nodes_a), Some("aaaa".to_string()));
+        assert_eq!(cluster_signature(&nodes_a), cluster_signature(&nodes_b));
+    }
 }

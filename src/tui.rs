@@ -192,8 +192,8 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         vec![
             Constraint::Length(20),
             Constraint::Length(21),
-            Constraint::Length(10),
-            Constraint::Length(12),
+            Constraint::Length(6),
+            Constraint::Length(7),
             Constraint::Length(11),
             Constraint::Length(8),
             Constraint::Length(8),
@@ -203,9 +203,9 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         ]
     } else {
         vec![
-            Constraint::Length(29),
-            Constraint::Length(10),
-            Constraint::Length(12),
+            Constraint::Length(33),
+            Constraint::Length(6),
+            Constraint::Length(7),
             Constraint::Length(11),
             Constraint::Length(8),
             Constraint::Length(8),

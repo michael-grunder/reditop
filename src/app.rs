@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
 use crate::target_addr::is_local_address;
@@ -41,6 +41,12 @@ pub struct AppState {
     pub detail_tab: usize,
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
+}
+
+struct TreeRenderCtx<'a> {
+    filtered_map: &'a HashMap<String, &'a InstanceState>,
+    group: &'a TreeGroup,
+    cluster_labels: &'a HashMap<String, String>,
 }
 
 impl AppState {
@@ -107,16 +113,17 @@ impl AppState {
     pub fn visible_rows(&self) -> Vec<DisplayRow> {
         let mut nodes: Vec<&InstanceState> = self.instances.values().collect();
         nodes.retain(|node| self.matches_filter(node));
+        let cluster_labels = self.cluster_labels();
 
         match self.view_mode {
             ViewMode::Flat => {
                 sort_instances(&mut nodes, self.sort_mode);
                 nodes
                     .into_iter()
-                    .map(|node| self.to_display_row(node, ""))
+                    .map(|node| self.to_display_row(node, "", &cluster_labels))
                     .collect()
             }
-            ViewMode::Tree => self.build_tree_rows(nodes),
+            ViewMode::Tree => self.build_tree_rows(nodes, &cluster_labels),
         }
     }
 
@@ -130,7 +137,11 @@ impl AppState {
             .any(|instance| !is_local_address(&instance.addr))
     }
 
-    fn build_tree_rows(&self, filtered_nodes: Vec<&InstanceState>) -> Vec<DisplayRow> {
+    fn build_tree_rows(
+        &self,
+        filtered_nodes: Vec<&InstanceState>,
+        cluster_labels: &HashMap<String, String>,
+    ) -> Vec<DisplayRow> {
         let mut filtered_map: HashMap<String, &InstanceState> = HashMap::new();
         for node in filtered_nodes {
             filtered_map.insert(node.key.clone(), node);
@@ -146,18 +157,16 @@ impl AppState {
                 .collect();
             sort_tree_roots(&mut roots, self.sort_mode);
             let mut rendered = HashSet::new();
+            let ctx = TreeRenderCtx {
+                filtered_map: &filtered_map,
+                group: &group,
+                cluster_labels,
+            };
 
             for root in roots {
                 rendered.insert(root.key.clone());
-                out.push(self.to_display_row(root, ""));
-                self.append_tree_children(
-                    &mut out,
-                    &filtered_map,
-                    &group,
-                    &root.key,
-                    "  ",
-                    &mut rendered,
-                );
+                out.push(self.to_display_row(root, "", cluster_labels));
+                self.append_tree_children(&mut out, &ctx, &root.key, "", &mut rendered);
             }
         }
 
@@ -167,18 +176,18 @@ impl AppState {
     fn append_tree_children(
         &self,
         out: &mut Vec<DisplayRow>,
-        filtered_map: &HashMap<String, &InstanceState>,
-        group: &TreeGroup,
+        ctx: &TreeRenderCtx<'_>,
         parent_key: &str,
         indent: &str,
         rendered: &mut HashSet<String>,
     ) {
-        let mut children: Vec<&InstanceState> = group
+        let mut children: Vec<&InstanceState> = ctx
+            .group
             .children
             .get(parent_key)
             .map(|keys| {
                 keys.iter()
-                    .filter_map(|key| filtered_map.get(key))
+                    .filter_map(|key| ctx.filtered_map.get(key))
                     .copied()
                     .collect::<Vec<&InstanceState>>()
             })
@@ -193,33 +202,42 @@ impl AppState {
 
             let is_last = idx + 1 == children.len();
             let branch = if is_last { "└─ " } else { "├─ " };
-            out.push(self.to_display_row(child, &format!("{indent}{branch}")));
+            out.push(self.to_display_row(child, &format!("{indent}{branch}"), ctx.cluster_labels));
 
             let next_indent = if is_last {
                 format!("{indent}   ")
             } else {
                 format!("{indent}│  ")
             };
-            self.append_tree_children(out, filtered_map, group, &child.key, &next_indent, rendered);
+            self.append_tree_children(out, ctx, &child.key, &next_indent, rendered);
         }
     }
 
-    fn to_display_row(&self, node: &InstanceState, prefix: &str) -> DisplayRow {
+    fn to_display_row(
+        &self,
+        node: &InstanceState,
+        prefix: &str,
+        cluster_labels: &HashMap<String, String>,
+    ) -> DisplayRow {
         let alias = node
             .alias
             .clone()
             .unwrap_or_else(|| shorten_addr(&node.addr).to_string());
         let alias_or_addr = format!("{prefix}{alias}");
+        let raw_cluster = node
+            .cluster_id
+            .clone()
+            .unwrap_or_else(|| "Standalone".to_string());
 
         DisplayRow {
             key: node.key.clone(),
             alias_or_addr,
             address: node.addr.clone(),
-            node_type: node.kind.as_str().to_string(),
-            cluster: node
-                .cluster_id
-                .clone()
-                .unwrap_or_else(|| "Standalone".to_string()),
+            node_type: compact_instance_type(node.kind).to_string(),
+            cluster: cluster_labels
+                .get(&raw_cluster)
+                .cloned()
+                .unwrap_or_else(|| "?".to_string()),
             mem_used: node
                 .used_memory_bytes
                 .map(human_bytes)
@@ -261,6 +279,23 @@ impl AppState {
                 .tags
                 .iter()
                 .any(|tag| tag.to_ascii_lowercase().contains(&needle))
+    }
+
+    fn cluster_labels(&self) -> HashMap<String, String> {
+        let mut ordered = BTreeMap::<String, ()>::new();
+        for instance in self.instances.values() {
+            let raw_cluster = instance
+                .cluster_id
+                .clone()
+                .unwrap_or_else(|| "Standalone".to_string());
+            ordered.insert(raw_cluster, ());
+        }
+
+        ordered
+            .keys()
+            .enumerate()
+            .map(|(idx, raw_cluster)| (raw_cluster.clone(), (idx + 1).to_string()))
+            .collect()
     }
 }
 
@@ -331,10 +366,20 @@ fn shorten_addr(addr: &str) -> &str {
     addr.rsplit('/').next().unwrap_or(addr)
 }
 
+fn compact_instance_type(kind: InstanceType) -> &'static str {
+    match kind {
+        InstanceType::Standalone => "STD",
+        InstanceType::Cluster => "CLU",
+        InstanceType::Primary => "PRI",
+        InstanceType::Replica => "REP",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::AppState;
     use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
+    use std::collections::HashMap;
     use std::time::Duration;
 
     fn settings() -> RuntimeSettings {
@@ -367,7 +412,33 @@ mod tests {
         assert_eq!(rows[0].key, "primary");
         assert!(!rows[0].alias_or_addr.contains("└─"));
         assert_eq!(rows[1].key, "replica");
-        assert!(rows[1].alias_or_addr.starts_with("  └─ "));
+        assert!(rows[1].alias_or_addr.starts_with("└─ "));
+        assert_eq!(rows[0].node_type, "PRI");
+        assert_eq!(rows[1].node_type, "REP");
+    }
+
+    #[test]
+    fn maps_raw_cluster_ids_to_compact_logical_ids() {
+        let mut app = AppState::new(settings());
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.cluster_id = Some("def959b8".into());
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.cluster_id = Some("af8898a8".into());
+        let mut c = InstanceState::new("c".into(), "127.0.0.1:6381".into());
+        c.cluster_id = Some("def959b8".into());
+
+        app.apply_update(a);
+        app.apply_update(b);
+        app.apply_update(c);
+
+        let rows = app.visible_rows();
+        let cluster_by_key: HashMap<String, String> =
+            rows.into_iter().map(|row| (row.key, row.cluster)).collect();
+
+        assert_eq!(cluster_by_key.get("a"), Some(&"2".to_string()));
+        assert_eq!(cluster_by_key.get("b"), Some(&"1".to_string()));
+        assert_eq!(cluster_by_key.get("c"), Some(&"2".to_string()));
     }
 
     #[test]
