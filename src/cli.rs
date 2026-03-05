@@ -6,6 +6,7 @@ use clap::{Parser, ValueEnum};
 
 use crate::config;
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
+use crate::target_addr::normalize_tcp_addr;
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -142,9 +143,10 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
         })
     }));
     cli_targets.extend(args.tcp_targets.into_iter().map(|raw| {
+        let addr = normalize_tcp_addr(&raw)?;
         Ok(Target {
             alias: None,
-            addr: raw,
+            addr,
             protocol: TargetProtocol::Tcp,
             username: args.user.clone(),
             password: args.auth.clone(),
@@ -191,7 +193,7 @@ fn parse_target_string(raw: &str) -> Result<Target> {
     } else if raw.contains('/') {
         (TargetProtocol::Unix, raw.to_string())
     } else {
-        (TargetProtocol::Tcp, raw.to_string())
+        (TargetProtocol::Tcp, normalize_tcp_addr(raw)?)
     };
 
     Ok(Target {

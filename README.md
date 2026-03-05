@@ -40,10 +40,14 @@ Examples:
 
 ```bash
 reditop 127.0.0.1:6379 127.0.0.1:6380
+reditop 6379 6380
 reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
 reditop --config ~/.config/redis-top/config.toml
 reditop -c config.toml 127.0.0.1:6379
 ```
+
+For TCP targets, you can pass just a port (for example `6379`), and it is treated as
+`127.0.0.1:6379`.
 
 Important options:
 

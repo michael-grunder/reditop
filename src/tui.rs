@@ -160,12 +160,15 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     frame.render_widget(header, chunks[0]);
 
     let rows = app.visible_rows();
+    let show_address = app.show_address_column();
     let table_rows: Vec<Row<'_>> = rows
         .iter()
         .map(|row| {
-            let base = Row::new(vec![
-                Cell::from(row.alias_or_addr.clone()),
-                Cell::from(row.address.clone()),
+            let mut cells = vec![Cell::from(row.alias_or_addr.clone())];
+            if show_address {
+                cells.push(Cell::from(row.address.clone()));
+            }
+            cells.extend([
                 Cell::from(row.node_type.clone()),
                 Cell::from(row.cluster.clone()),
                 Cell::from(row.mem_used.clone()),
@@ -175,6 +178,8 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
                 Cell::from(row.lat_max.clone()),
                 Cell::from(row.status.clone()),
             ]);
+
+            let base = Row::new(cells);
             if row.stale {
                 base.style(Style::default().add_modifier(Modifier::DIM))
             } else {
@@ -183,10 +188,8 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         })
         .collect();
 
-    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-    let table = Table::new(
-        table_rows,
-        [
+    let constraints = if show_address {
+        vec![
             Constraint::Length(20),
             Constraint::Length(21),
             Constraint::Length(10),
@@ -197,14 +200,38 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(10),
-        ],
-    )
-    .header(Row::new(vec![
-        "Alias", "Address", "Type", "Cluster", "Mem", "Max%", "Ops/s", "Lat", "LatMax", "Status",
-    ]))
-    .block(Block::default().borders(Borders::ALL))
-    .row_highlight_style(selected_style)
-    .highlight_symbol("> ");
+        ]
+    } else {
+        vec![
+            Constraint::Length(29),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(11),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(10),
+        ]
+    };
+
+    let header = if show_address {
+        Row::new(vec![
+            "Alias", "Address", "Type", "Cluster", "Mem", "Max%", "Ops/s", "Lat", "LatMax",
+            "Status",
+        ])
+    } else {
+        Row::new(vec![
+            "Alias", "Type", "Cluster", "Mem", "Max%", "Ops/s", "Lat", "LatMax", "Status",
+        ])
+    };
+
+    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+    let table = Table::new(table_rows, constraints)
+        .header(header)
+        .block(Block::default().borders(Borders::ALL))
+        .row_highlight_style(selected_style)
+        .highlight_symbol("> ");
 
     let mut state = ratatui::widgets::TableState::default().with_selected(Some(app.selected_index));
     frame.render_stateful_widget(table, chunks[1], &mut state);
@@ -426,7 +453,9 @@ fn draw_help_page(frame: &mut ratatui::Frame<'_>) {
         .map(|(keys, action)| Row::new(vec![Cell::from(*keys), Cell::from(*action)]))
         .collect();
     let table = Table::new(rows, [Constraint::Length(24), Constraint::Min(20)])
-        .header(Row::new(vec!["Keys", "Action"]).style(Style::default().add_modifier(Modifier::BOLD)))
+        .header(
+            Row::new(vec!["Keys", "Action"]).style(Style::default().add_modifier(Modifier::BOLD)),
+        )
         .block(
             Block::default()
                 .borders(Borders::ALL)

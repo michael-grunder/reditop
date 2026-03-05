@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
+use crate::target_addr::normalize_tcp_addr;
 
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
@@ -90,7 +91,8 @@ pub fn load_config(
                 );
                 continue;
             };
-            if addr.trim().is_empty() {
+            let addr = addr.trim().to_string();
+            if addr.is_empty() {
                 eprintln!(
                     "warning: skipping target with empty addr in {}",
                     path.display()
@@ -99,6 +101,10 @@ pub fn load_config(
             }
 
             let protocol = parse_protocol(entry.protocol.as_deref(), &addr)?;
+            let addr = match protocol {
+                TargetProtocol::Tcp => normalize_tcp_addr(&addr)?,
+                TargetProtocol::Unix => addr,
+            };
             targets.push(Target {
                 alias: entry.alias,
                 addr,

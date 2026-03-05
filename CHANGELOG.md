@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
 - Updated CLI binary name/docs to `reditop`.
 - Updated detail view metric rendering to aligned key/value columns with thousands-separated numeric formatting for readability.
+- Tree view rendering now shows primaries as top-level rows and indents replicas beneath their assigned primary.
+- Overview table now omits the Address column automatically when all visible instances are localhost targets.
 ### Deprecated
 ### Removed
 ### Fixed
+- Fixed tree view dropping replicas when their `parent_addr` did not exactly match a primary key; parent lookup now resolves by key or address and keeps unresolved replicas visible.
+- Fixed topology grouping that could flatten replication trees by splitting related nodes into separate groups.
+- Fixed TCP target parsing to accept port-only values (for example `6379`) as `127.0.0.1:6379` in both CLI and config.
