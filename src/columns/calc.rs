@@ -1,0 +1,182 @@
+use crate::column::{
+    Align, CellText, Column, FormatSpec, RenderCtx, SortCtx, SortKey, WidthHint, compact_role,
+    default_label, format_millis, format_percent, parse_u64, status_text,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CalcKind {
+    Addr,
+    Alias,
+    Role,
+    Cluster,
+    Status,
+    LatencyLastMs,
+    LatencyMaxMs,
+    MaxmemoryPercent {
+        used_key: String,
+        max_key: String,
+    },
+    HitratePercent {
+        hits_key: String,
+        misses_key: String,
+    },
+    ClientsTotal {
+        key: String,
+    },
+    OpsPerSec {
+        key: String,
+    },
+}
+
+pub struct CalcColumn {
+    pub header: String,
+    pub kind: CalcKind,
+    pub format: FormatSpec,
+    pub missing: String,
+    pub align: Align,
+    pub width_hint: WidthHint,
+}
+
+impl CalcColumn {
+    fn calc_value(&self, ctx: &RenderCtx<'_>) -> Option<String> {
+        let snap = ctx.snap;
+        match &self.kind {
+            CalcKind::Addr => Some(snap.addr.clone()),
+            CalcKind::Alias => {
+                let base = snap
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| default_label(&snap.addr, ctx.omit_host));
+                Some(format!("{}{}", ctx.tree_prefix, base))
+            }
+            CalcKind::Role => Some(compact_role(snap).to_string()),
+            CalcKind::Cluster => Some(ctx.cluster_label.unwrap_or("?").to_string()),
+            CalcKind::Status => Some(status_text(snap.status).to_string()),
+            CalcKind::LatencyLastMs => snap.last_latency_ms.map(|value| self.format_f64(value)),
+            CalcKind::LatencyMaxMs => Some(self.format_f64(snap.max_latency_ms)),
+            CalcKind::MaxmemoryPercent { used_key, max_key } => {
+                let used = parse_u64(snap, used_key).or(snap.used_memory_bytes)?;
+                let max = parse_u64(snap, max_key).or(snap.maxmemory_bytes)?;
+                if max == 0 {
+                    return None;
+                }
+                let value = used as f64 / max as f64 * 100.0;
+                Some(self.format_f64(value))
+            }
+            CalcKind::HitratePercent {
+                hits_key,
+                misses_key,
+            } => {
+                let hits = parse_u64(snap, hits_key)
+                    .or(snap.detail.keyspace_hits)
+                    .unwrap_or(0);
+                let misses = parse_u64(snap, misses_key)
+                    .or(snap.detail.keyspace_misses)
+                    .unwrap_or(0);
+                let total = hits + misses;
+                if total == 0 {
+                    return None;
+                }
+                let value = hits as f64 / total as f64 * 100.0;
+                Some(self.format_f64(value))
+            }
+            CalcKind::ClientsTotal { key } => parse_u64(snap, key)
+                .or(snap.detail.connected_clients)
+                .map(|value| value.to_string()),
+            CalcKind::OpsPerSec { key } => parse_u64(snap, key)
+                .or(snap.ops_per_sec)
+                .map(|value| value.to_string()),
+        }
+    }
+
+    fn calc_sort_key(&self, ctx: &SortCtx<'_>) -> SortKey {
+        let snap = ctx.snap;
+        match &self.kind {
+            CalcKind::Addr => SortKey::Str(snap.addr.to_ascii_lowercase()),
+            CalcKind::Alias => {
+                let value = snap
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| default_label(&snap.addr, ctx.omit_host));
+                SortKey::Str(value.to_ascii_lowercase())
+            }
+            CalcKind::Role => SortKey::Str(compact_role(snap).to_string()),
+            CalcKind::Cluster => ctx
+                .cluster_label
+                .map(|value| SortKey::Str(value.to_string()))
+                .unwrap_or(SortKey::Null),
+            CalcKind::Status => SortKey::U64(snap.status.severity() as u64),
+            CalcKind::LatencyLastMs => snap
+                .last_latency_ms
+                .map(SortKey::F64)
+                .unwrap_or(SortKey::Null),
+            CalcKind::LatencyMaxMs => SortKey::F64(snap.max_latency_ms),
+            CalcKind::MaxmemoryPercent { used_key, max_key } => {
+                let used = parse_u64(snap, used_key).or(snap.used_memory_bytes);
+                let max = parse_u64(snap, max_key).or(snap.maxmemory_bytes);
+                match (used, max) {
+                    (Some(used), Some(max)) if max > 0 => SortKey::F64(used as f64 / max as f64),
+                    _ => SortKey::Null,
+                }
+            }
+            CalcKind::HitratePercent {
+                hits_key,
+                misses_key,
+            } => {
+                let hits = parse_u64(snap, hits_key)
+                    .or(snap.detail.keyspace_hits)
+                    .unwrap_or(0);
+                let misses = parse_u64(snap, misses_key)
+                    .or(snap.detail.keyspace_misses)
+                    .unwrap_or(0);
+                let total = hits + misses;
+                if total == 0 {
+                    SortKey::Null
+                } else {
+                    SortKey::F64(hits as f64 / total as f64)
+                }
+            }
+            CalcKind::ClientsTotal { key } => parse_u64(snap, key)
+                .or(snap.detail.connected_clients)
+                .map(SortKey::U64)
+                .unwrap_or(SortKey::Null),
+            CalcKind::OpsPerSec { key } => parse_u64(snap, key)
+                .or(snap.ops_per_sec)
+                .map(SortKey::U64)
+                .unwrap_or(SortKey::Null),
+        }
+    }
+
+    fn format_f64(&self, value: f64) -> String {
+        match self.format {
+            FormatSpec::Raw => value.to_string(),
+            FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, value),
+            FormatSpec::Percent(decimals) => format_percent(value, decimals),
+            FormatSpec::Millis(decimals) => format_millis(value, decimals),
+            FormatSpec::BytesHuman => crate::column::format_bytes(value.max(0.0) as u64),
+        }
+    }
+}
+
+impl Column for CalcColumn {
+    fn header(&self) -> &str {
+        &self.header
+    }
+
+    fn align(&self) -> Align {
+        self.align
+    }
+
+    fn width_hint(&self) -> WidthHint {
+        self.width_hint
+    }
+
+    fn render_cell(&self, ctx: &RenderCtx<'_>) -> CellText {
+        let text = self.calc_value(ctx).unwrap_or_else(|| self.missing.clone());
+        CellText::plain(text)
+    }
+
+    fn sort_key(&self, ctx: &SortCtx<'_>) -> SortKey {
+        self.calc_sort_key(ctx)
+    }
+}

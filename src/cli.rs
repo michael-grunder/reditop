@@ -23,6 +23,8 @@ pub struct LaunchConfig {
     pub settings: RuntimeSettings,
     pub targets: Vec<Target>,
     pub verbose: bool,
+    pub config_path: Option<PathBuf>,
+    pub no_default_config: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -228,6 +230,8 @@ pub async fn build_launch_config() -> Result<LaunchConfig> {
         settings,
         targets: merged_targets,
         verbose: args.verbose,
+        config_path: args.config,
+        no_default_config: args.no_config,
     })
 }
 

@@ -21,6 +21,16 @@ impl ParsedInfo {
             .map(|value| value == "1")
             .unwrap_or(false)
     }
+
+    pub fn flat_map(&self) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for section in self.sections.values() {
+            for (key, value) in section {
+                out.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+        out
+    }
 }
 
 pub fn parse_info(input: &str) -> ParsedInfo {

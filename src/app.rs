@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::model::{
-    InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, ViewMode,
-};
-use crate::target_addr::{canonical_host, strip_host};
+use crate::column::{RenderCtx, SortCtx};
+use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortDirection, ViewMode};
+use crate::registry::ColumnRegistry;
+use crate::target_addr::canonical_host;
 use crate::topology::{TreeGroup, build_tree_groups};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,22 +32,14 @@ impl FilterPromptMode {
 #[derive(Debug, Clone)]
 pub struct DisplayRow {
     pub key: String,
-    pub alias_or_addr: String,
-    pub address: String,
-    pub node_type: String,
-    pub cluster: String,
-    pub memory: String,
-    pub ops: String,
-    pub lat_last: String,
-    pub lat_max: String,
-    pub status: String,
+    pub tree_prefix: String,
     pub stale: bool,
 }
 
 pub struct AppState {
     pub settings: RuntimeSettings,
     pub view_mode: ViewMode,
-    pub sort_mode: SortMode,
+    pub sort_by: String,
     pub sort_direction: SortDirection,
     pub is_sorting: bool,
     pub sort_picker_index: usize,
@@ -62,6 +54,7 @@ pub struct AppState {
     pub force_show_host: bool,
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
+    pub column_registry: ColumnRegistry,
 }
 
 struct TreeRenderCtx<'a> {
@@ -71,11 +64,11 @@ struct TreeRenderCtx<'a> {
 }
 
 impl AppState {
-    pub fn new(settings: RuntimeSettings) -> Self {
+    pub fn new(settings: RuntimeSettings, column_registry: ColumnRegistry) -> Self {
         Self {
             view_mode: settings.default_view,
-            sort_mode: settings.default_sort,
-            sort_direction: default_sort_direction(settings.default_sort),
+            sort_by: column_registry.default_sort_by.clone(),
+            sort_direction: column_registry.default_sort_direction,
             is_sorting: false,
             sort_picker_index: 0,
             settings,
@@ -90,6 +83,7 @@ impl AppState {
             force_show_host: false,
             instances: HashMap::new(),
             should_quit: false,
+            column_registry,
         }
     }
 
@@ -153,14 +147,26 @@ impl AppState {
 
         match self.view_mode {
             ViewMode::Flat => {
-                sort_instances(&mut nodes, self.sort_mode, self.sort_direction);
+                sort_instances(
+                    &mut nodes,
+                    &self.sort_by,
+                    self.sort_direction,
+                    &cluster_labels,
+                    should_omit_host,
+                    &self.column_registry,
+                );
                 nodes
                     .into_iter()
-                    .map(|node| self.to_display_row(node, "", should_omit_host, &cluster_labels))
+                    .map(|node| self.to_display_row(node, ""))
                     .collect()
             }
             ViewMode::Tree => self.build_tree_rows(nodes, should_omit_host, &cluster_labels),
         }
+    }
+
+    pub fn visible_column_keys(&self) -> Vec<String> {
+        self.column_registry
+            .visible_columns(self.show_address_column())
     }
 
     pub fn show_address_column(&self) -> bool {
@@ -171,28 +177,22 @@ impl AppState {
         self.force_show_host = !self.force_show_host;
     }
 
-    pub fn sortable_columns(&self) -> Vec<SortMode> {
-        let mut columns = vec![SortMode::Alias];
-        if self.show_address_column() {
-            columns.push(SortMode::Address);
-        }
-        columns.extend([
-            SortMode::Type,
-            SortMode::Cluster,
-            SortMode::Mem,
-            SortMode::Ops,
-            SortMode::Lat,
-            SortMode::LatMax,
-            SortMode::Status,
-        ]);
-        columns
+    pub fn sortable_columns(&self) -> Vec<String> {
+        self.visible_column_keys()
+    }
+
+    pub fn sort_label(&self) -> String {
+        self.column_registry
+            .column(&self.sort_by)
+            .map(|column| column.header().to_string())
+            .unwrap_or_else(|| self.sort_by.clone())
     }
 
     pub fn open_sort_picker(&mut self) {
         let columns = self.sortable_columns();
         self.sort_picker_index = columns
             .iter()
-            .position(|mode| *mode == self.sort_mode)
+            .position(|key| *key == self.sort_by)
             .unwrap_or(0);
         self.is_sorting = true;
     }
@@ -214,15 +214,15 @@ impl AppState {
 
     pub fn apply_sort_picker_selection(&mut self) {
         let columns = self.sortable_columns();
-        let Some(chosen_mode) = columns.get(self.sort_picker_index).copied() else {
+        let Some(chosen_key) = columns.get(self.sort_picker_index).cloned() else {
             self.is_sorting = false;
             return;
         };
-        if self.sort_mode == chosen_mode {
+        if self.sort_by == chosen_key {
             self.sort_direction = self.sort_direction.toggle();
         } else {
-            self.sort_mode = chosen_mode;
-            self.sort_direction = default_sort_direction(chosen_mode);
+            self.sort_by = chosen_key;
+            self.sort_direction = default_sort_direction_for_column(&self.sort_by);
         }
         self.is_sorting = false;
         self.clamp_selection();
@@ -230,14 +230,34 @@ impl AppState {
 
     pub fn cycle_sort_mode(&mut self) {
         let columns = self.sortable_columns();
+        if columns.is_empty() {
+            return;
+        }
         let current_idx = columns
             .iter()
-            .position(|mode| *mode == self.sort_mode)
+            .position(|key| *key == self.sort_by)
             .unwrap_or(0);
         let next_idx = (current_idx + 1) % columns.len();
-        self.sort_mode = columns[next_idx];
-        self.sort_direction = default_sort_direction(self.sort_mode);
+        self.sort_by = columns[next_idx].clone();
+        self.sort_direction = default_sort_direction_for_column(&self.sort_by);
         self.clamp_selection();
+    }
+
+    pub fn render_cell(&self, row: &DisplayRow, column_key: &str) -> Option<String> {
+        let node = self.instances.get(&row.key)?;
+        let raw_cluster = node
+            .cluster_id
+            .clone()
+            .unwrap_or_else(|| "Standalone".to_string());
+        let cluster_label = self.cluster_labels().get(&raw_cluster).cloned();
+        let column = self.column_registry.column(column_key)?;
+        let ctx = RenderCtx {
+            snap: node,
+            omit_host: self.should_omit_host_in_rendering(),
+            tree_prefix: &row.tree_prefix,
+            cluster_label: cluster_label.as_deref(),
+        };
+        Some(column.render_cell(&ctx).text)
     }
 
     fn build_tree_rows(
@@ -259,7 +279,14 @@ impl AppState {
                 .filter_map(|key| filtered_map.get(key))
                 .copied()
                 .collect();
-            sort_tree_roots(&mut roots, self.sort_mode, self.sort_direction);
+            sort_tree_roots(
+                &mut roots,
+                &self.sort_by,
+                self.sort_direction,
+                cluster_labels,
+                should_omit_host,
+                &self.column_registry,
+            );
             let mut rendered = HashSet::new();
             let ctx = TreeRenderCtx {
                 filtered_map: &filtered_map,
@@ -269,7 +296,7 @@ impl AppState {
 
             for root in roots {
                 rendered.insert(root.key.clone());
-                out.push(self.to_display_row(root, "", should_omit_host, cluster_labels));
+                out.push(self.to_display_row(root, ""));
                 self.append_tree_children(
                     &mut out,
                     &ctx,
@@ -304,7 +331,14 @@ impl AppState {
                     .collect::<Vec<&InstanceState>>()
             })
             .unwrap_or_default();
-        sort_instances(&mut children, self.sort_mode, self.sort_direction);
+        sort_instances(
+            &mut children,
+            &self.sort_by,
+            self.sort_direction,
+            ctx.cluster_labels,
+            should_omit_host,
+            &self.column_registry,
+        );
 
         for (idx, child) in children.iter().enumerate() {
             if rendered.contains(&child.key) {
@@ -314,12 +348,7 @@ impl AppState {
 
             let is_last = idx + 1 == children.len();
             let branch = if is_last { "└─ " } else { "├─ " };
-            out.push(self.to_display_row(
-                child,
-                &format!("{indent}{branch}"),
-                should_omit_host,
-                ctx.cluster_labels,
-            ));
+            out.push(self.to_display_row(child, &format!("{indent}{branch}")));
 
             let next_indent = if is_last {
                 format!("{indent}   ")
@@ -337,43 +366,10 @@ impl AppState {
         }
     }
 
-    fn to_display_row(
-        &self,
-        node: &InstanceState,
-        prefix: &str,
-        should_omit_host: bool,
-        cluster_labels: &HashMap<String, String>,
-    ) -> DisplayRow {
-        let alias = node
-            .alias
-            .clone()
-            .unwrap_or_else(|| default_row_label(&node.addr, should_omit_host));
-        let alias_or_addr = format!("{prefix}{alias}");
-        let raw_cluster = node
-            .cluster_id
-            .clone()
-            .unwrap_or_else(|| "Standalone".to_string());
-
+    fn to_display_row(&self, node: &InstanceState, prefix: &str) -> DisplayRow {
         DisplayRow {
             key: node.key.clone(),
-            alias_or_addr,
-            address: node.addr.clone(),
-            node_type: compact_instance_type(node.kind).to_string(),
-            cluster: cluster_labels
-                .get(&raw_cluster)
-                .cloned()
-                .unwrap_or_else(|| "?".to_string()),
-            memory: format_memory_usage(node.used_memory_bytes, node.maxmemory_bytes),
-            ops: node
-                .ops_per_sec
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            lat_last: node
-                .last_latency_ms
-                .map(|v| format!("{v:.2}"))
-                .unwrap_or_else(|| "-".to_string()),
-            lat_max: format!("{:.2}", node.max_latency_ms),
-            status: node.status.as_str().to_string(),
+            tree_prefix: prefix.to_string(),
             stale: node.is_stale(self.settings.refresh_interval),
         }
     }
@@ -432,45 +428,85 @@ impl AppState {
     }
 }
 
-fn sort_instances(instances: &mut Vec<&InstanceState>, mode: SortMode, direction: SortDirection) {
-    instances.sort_by(|a, b| compare_instances(a, b, mode, direction));
+fn sort_instances(
+    instances: &mut Vec<&InstanceState>,
+    sort_by: &str,
+    direction: SortDirection,
+    cluster_labels: &HashMap<String, String>,
+    omit_host: bool,
+    registry: &ColumnRegistry,
+) {
+    instances.sort_by(|a, b| {
+        compare_instances(
+            a,
+            b,
+            sort_by,
+            direction,
+            cluster_labels,
+            omit_host,
+            registry,
+        )
+    });
 }
 
 fn compare_instances(
     a: &InstanceState,
     b: &InstanceState,
-    mode: SortMode,
+    sort_by: &str,
     direction: SortDirection,
+    cluster_labels: &HashMap<String, String>,
+    omit_host: bool,
+    registry: &ColumnRegistry,
 ) -> Ordering {
-    let ordering = match mode {
-        SortMode::Alias => instance_sort_label(a).cmp(&instance_sort_label(b)),
-        SortMode::Address => a.addr.cmp(&b.addr),
-        SortMode::Type => compact_instance_type(a.kind).cmp(compact_instance_type(b.kind)),
-        SortMode::Cluster => a.cluster_id.cmp(&b.cluster_id),
-        SortMode::Mem => a
-            .used_memory_bytes
-            .unwrap_or(0)
-            .cmp(&b.used_memory_bytes.unwrap_or(0)),
-        SortMode::Ops => a.ops_per_sec.unwrap_or(0).cmp(&b.ops_per_sec.unwrap_or(0)),
-        SortMode::Lat => a
-            .last_latency_ms
-            .unwrap_or(0.0)
-            .partial_cmp(&b.last_latency_ms.unwrap_or(0.0))
-            .unwrap_or(Ordering::Equal),
-        SortMode::LatMax => a
-            .max_latency_ms
-            .partial_cmp(&b.max_latency_ms)
-            .unwrap_or(Ordering::Equal),
-        SortMode::Status => a.status.severity().cmp(&b.status.severity()),
+    let ordering = if let Some(column) = registry.column(sort_by) {
+        let a_cluster = a
+            .cluster_id
+            .clone()
+            .unwrap_or_else(|| "Standalone".to_string());
+        let b_cluster = b
+            .cluster_id
+            .clone()
+            .unwrap_or_else(|| "Standalone".to_string());
+        let a_ctx = SortCtx {
+            snap: a,
+            omit_host,
+            cluster_label: cluster_labels.get(&a_cluster).map(String::as_str),
+        };
+        let b_ctx = SortCtx {
+            snap: b,
+            omit_host,
+            cluster_label: cluster_labels.get(&b_cluster).map(String::as_str),
+        };
+        column.sort_key(&a_ctx).compare(&column.sort_key(&b_ctx))
+    } else {
+        a.addr.cmp(&b.addr)
     };
+
     apply_direction(ordering, direction).then_with(|| a.addr.cmp(&b.addr))
 }
 
-fn sort_tree_roots(instances: &mut Vec<&InstanceState>, mode: SortMode, direction: SortDirection) {
+fn sort_tree_roots(
+    instances: &mut Vec<&InstanceState>,
+    sort_by: &str,
+    direction: SortDirection,
+    cluster_labels: &HashMap<String, String>,
+    omit_host: bool,
+    registry: &ColumnRegistry,
+) {
     instances.sort_by(|a, b| {
         root_kind_rank(a.kind)
             .cmp(&root_kind_rank(b.kind))
-            .then_with(|| compare_instances(a, b, mode, direction))
+            .then_with(|| {
+                compare_instances(
+                    a,
+                    b,
+                    sort_by,
+                    direction,
+                    cluster_labels,
+                    omit_host,
+                    registry,
+                )
+            })
     });
 }
 
@@ -481,23 +517,11 @@ fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
     }
 }
 
-fn default_sort_direction(mode: SortMode) -> SortDirection {
-    match mode {
-        SortMode::Alias
-        | SortMode::Address
-        | SortMode::Type
-        | SortMode::Cluster
-        | SortMode::Status => SortDirection::Asc,
-        SortMode::Mem | SortMode::Ops | SortMode::Lat | SortMode::LatMax => SortDirection::Desc,
+fn default_sort_direction_for_column(column_key: &str) -> SortDirection {
+    match column_key {
+        "alias" | "addr" | "role" | "cluster" | "status" => SortDirection::Asc,
+        _ => SortDirection::Desc,
     }
-}
-
-fn instance_sort_label(instance: &InstanceState) -> String {
-    instance
-        .alias
-        .clone()
-        .unwrap_or_else(|| instance.addr.clone())
-        .to_ascii_lowercase()
 }
 
 fn root_kind_rank(kind: InstanceType) -> u8 {
@@ -509,58 +533,13 @@ fn root_kind_rank(kind: InstanceType) -> u8 {
     }
 }
 
-fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut idx = 0;
-    while value >= 1024.0 && idx + 1 < UNITS.len() {
-        value /= 1024.0;
-        idx += 1;
-    }
-    if idx == 0 {
-        format!("{} {}", bytes, UNITS[idx])
-    } else {
-        format!("{value:.1} {}", UNITS[idx])
-    }
-}
-
-fn format_memory_usage(used_bytes: Option<u64>, max_bytes: Option<u64>) -> String {
-    let Some(used) = used_bytes else {
-        return "-".to_string();
-    };
-    let used_human = human_bytes(used);
-    match max_bytes {
-        Some(max) if max > 0 => format!("{used_human}/{}", human_bytes(max)),
-        _ => used_human,
-    }
-}
-
-fn shorten_addr(addr: &str) -> &str {
-    addr.rsplit('/').next().unwrap_or(addr)
-}
-
-fn default_row_label(addr: &str, omit_host: bool) -> String {
-    if omit_host && let Some(without_host) = strip_host(addr) {
-        return without_host;
-    }
-    shorten_addr(addr).to_string()
-}
-
-fn compact_instance_type(kind: InstanceType) -> &'static str {
-    match kind {
-        InstanceType::Standalone => "STD",
-        InstanceType::Cluster => "CLU",
-        InstanceType::Primary => "PRI",
-        InstanceType::Replica => "REP",
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{AppState, FilterPromptMode, format_memory_usage};
+    use super::{AppState, FilterPromptMode};
     use crate::model::{
         InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, ViewMode,
     };
+    use crate::registry::ColumnRegistry;
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -575,9 +554,16 @@ mod tests {
         }
     }
 
+    fn app() -> AppState {
+        AppState::new(
+            settings(),
+            ColumnRegistry::load(None, true, SortMode::Address),
+        )
+    }
+
     #[test]
     fn tree_view_places_replicas_below_primary() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
 
         let mut replica = InstanceState::new("replica".into(), "127.0.0.1:6380".into());
         replica.kind = InstanceType::Replica;
@@ -592,16 +578,24 @@ mod tests {
         let rows = app.visible_rows();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].key, "primary");
-        assert!(!rows[0].alias_or_addr.contains("└─"));
+        assert!(
+            !app.render_cell(&rows[0], "alias")
+                .unwrap_or_default()
+                .contains("└─")
+        );
         assert_eq!(rows[1].key, "replica");
-        assert!(rows[1].alias_or_addr.starts_with("└─ "));
-        assert_eq!(rows[0].node_type, "PRI");
-        assert_eq!(rows[1].node_type, "REP");
+        assert!(
+            app.render_cell(&rows[1], "alias")
+                .unwrap_or_default()
+                .starts_with("└─ ")
+        );
+        assert_eq!(app.render_cell(&rows[0], "role").as_deref(), Some("PRI"));
+        assert_eq!(app.render_cell(&rows[1], "role").as_deref(), Some("REP"));
     }
 
     #[test]
     fn maps_raw_cluster_ids_to_compact_logical_ids() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
 
         let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
         a.cluster_id = Some("def959b8".into());
@@ -615,8 +609,15 @@ mod tests {
         app.apply_update(c);
 
         let rows = app.visible_rows();
-        let cluster_by_key: HashMap<String, String> =
-            rows.into_iter().map(|row| (row.key, row.cluster)).collect();
+        let cluster_by_key: HashMap<String, String> = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.key.clone(),
+                    app.render_cell(&row, "cluster").unwrap_or_default(),
+                )
+            })
+            .collect();
 
         assert_eq!(cluster_by_key.get("a"), Some(&"2".to_string()));
         assert_eq!(cluster_by_key.get("b"), Some(&"1".to_string()));
@@ -625,7 +626,7 @@ mod tests {
 
     #[test]
     fn hides_address_column_when_all_instance_hosts_are_equal() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
         app.apply_update(InstanceState::new("a".into(), "10.0.0.12:6379".into()));
         app.apply_update(InstanceState::new("b".into(), "10.0.0.12:6380".into()));
         assert!(!app.show_address_column());
@@ -633,7 +634,7 @@ mod tests {
 
     #[test]
     fn keeps_address_column_when_instance_hosts_are_mixed() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
         app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
         app.apply_update(InstanceState::new("b".into(), "10.0.0.12:6380".into()));
         assert!(app.show_address_column());
@@ -641,41 +642,33 @@ mod tests {
 
     #[test]
     fn default_label_omits_host_when_all_hosts_match() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
         app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
         app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
 
         let rows = app.visible_rows();
-        assert_eq!(rows[0].alias_or_addr, "6379");
-        assert_eq!(rows[1].alias_or_addr, "6380");
+        assert_eq!(app.render_cell(&rows[0], "alias").as_deref(), Some("6379"));
+        assert_eq!(app.render_cell(&rows[1], "alias").as_deref(), Some("6380"));
     }
 
     #[test]
     fn force_show_host_override_keeps_address_column_visible() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
         app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
         app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
         app.toggle_host_rendering();
 
         assert!(app.show_address_column());
         let rows = app.visible_rows();
-        assert_eq!(rows[0].alias_or_addr, "127.0.0.1:6379");
-    }
-
-    #[test]
-    fn memory_display_uses_single_column_with_optional_max() {
         assert_eq!(
-            format_memory_usage(Some(1024 * 1024 * 2), Some(1024 * 1024 * 4)),
-            "2.0 MiB/4.0 MiB"
+            app.render_cell(&rows[0], "alias").as_deref(),
+            Some("127.0.0.1:6379")
         );
-        assert_eq!(format_memory_usage(Some(1024 * 2), Some(0)), "2.0 KiB");
-        assert_eq!(format_memory_usage(Some(1024 * 2), None), "2.0 KiB");
-        assert_eq!(format_memory_usage(None, Some(1024 * 2)), "-");
     }
 
     #[test]
     fn start_filter_input_sets_mode_and_clear_behavior() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
         app.filter = "redis".to_string();
 
         app.start_filter_input(FilterPromptMode::Search, false);
@@ -691,25 +684,25 @@ mod tests {
 
     #[test]
     fn sort_picker_uses_only_visible_columns() {
-        let mut app = AppState::new(settings());
+        let mut app = app();
         app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
         app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
 
         let columns = app.sortable_columns();
-        assert!(columns.contains(&SortMode::Alias));
-        assert!(!columns.contains(&SortMode::Address));
+        assert!(columns.iter().any(|key| key == "alias"));
+        assert!(!columns.iter().any(|key| key == "addr"));
     }
 
     #[test]
     fn applying_same_sort_column_toggles_direction() {
-        let mut app = AppState::new(settings());
-        app.sort_mode = SortMode::Status;
+        let mut app = app();
+        app.sort_by = "status".to_string();
         app.sort_direction = SortDirection::Asc;
         app.open_sort_picker();
 
         app.apply_sort_picker_selection();
 
-        assert_eq!(app.sort_mode, SortMode::Status);
+        assert_eq!(app.sort_by, "status");
         assert_eq!(app.sort_direction, SortDirection::Desc);
     }
 }

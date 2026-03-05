@@ -1,0 +1,107 @@
+[columns.alias]
+type = "calc"
+header = "Alias"
+calc = "$alias"
+align = "left"
+min_width = 10
+ideal_width = 20
+max_width = 40
+
+[columns.addr]
+type = "calc"
+header = "Address"
+calc = "$addr"
+align = "left"
+min_width = 14
+ideal_width = 21
+max_width = 32
+
+[columns.role]
+type = "calc"
+header = "Type"
+calc = "$role"
+align = "left"
+min_width = 4
+ideal_width = 6
+max_width = 8
+
+[columns.cluster]
+type = "calc"
+header = "Cluster"
+calc = "$cluster"
+align = "left"
+min_width = 6
+ideal_width = 8
+max_width = 12
+
+[columns.used_mem]
+type = "info"
+header = "Memory"
+info_key = "used_memory"
+value_type = "bytes"
+format = "bytes_human"
+align = "right"
+min_width = 10
+ideal_width = 14
+max_width = 18
+missing = "-"
+
+[columns.maxmem_pct]
+type = "calc"
+header = "%MaxMem"
+calc = "maxmemory_percent"
+format = "pct:1"
+align = "right"
+min_width = 7
+ideal_width = 9
+max_width = 10
+missing = "-"
+
+[columns.ops]
+type = "calc"
+header = "Ops/s"
+calc = "ops_per_sec"
+format = "raw"
+align = "right"
+min_width = 6
+ideal_width = 8
+max_width = 10
+missing = "-"
+
+[columns.lat_last]
+type = "calc"
+header = "Lat"
+calc = "latency_last_ms"
+format = "ms:2"
+align = "right"
+min_width = 6
+ideal_width = 8
+max_width = 10
+missing = "-"
+
+[columns.lat_max]
+type = "calc"
+header = "LatMax"
+calc = "latency_max_ms"
+format = "ms:2"
+align = "right"
+min_width = 6
+ideal_width = 8
+max_width = 10
+missing = "-"
+
+[columns.status]
+type = "calc"
+header = "Status"
+calc = "$status"
+align = "left"
+min_width = 6
+ideal_width = 9
+max_width = 10
+
+[view.overview]
+visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "lat_max", "status"]
+
+[view.overview.sort]
+by = "addr"
+dir = "asc"

@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a dedicated full-screen help page opened with `H`, including key/action descriptions.
 - Added htop-style bottom key bar with function key labels: `F1 Help`, `F3 Search`, `F4 Filter`, `F5 Tree`, `F6 SortBy`.
 - Added `--cluster <HOST:PORT>` CLI option to seed cluster auto-discovery and monitor all discovered primary/replica nodes.
+- Added a generic overview column system with pluggable column trait, sortable typed sort keys, width/alignment metadata, and per-column rendering helpers.
+- Added built-in configurable column registry (`default_columns.toml`) with `info` and `calc` column kinds plus config-driven visible column/sort selection.
+- Added INFO flat key map snapshots on each instance update to support generic INFO column extraction.
 ### Changed
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
@@ -33,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added function-key aliases for existing overview actions (`F1` help, `F5` view toggle, `F6` sort cycle) and wired `F3`/`F4` into search/filter input entry.
 - Reworked overview sorting: `F6` now opens a selector built from currently displayed columns, sorting supports explicit direction, and the active header shows an `↑`/`↓` indicator.
 - Launch configuration now performs startup cluster-node expansion via `CLUSTER SHARDS` for `--cluster` seeds, then merges/disambiguates discovered targets with existing CLI/config targets.
+- Replaced hard-coded overview table rendering with config-resolved column rendering and dynamic width distribution based on column width hints.
+- Reworked overview sorting to use selected column keys from the registry instead of fixed enum-only columns.
+- Extended config support to read `[columns.*]` and `[view.overview]` for column definitions, visible list, and default sort (`by`/`dir`).
 ### Deprecated
 ### Removed
 ### Fixed

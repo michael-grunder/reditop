@@ -15,7 +15,9 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs,
 
 use crate::app::{ActiveView, AppState, FilterPromptMode};
 use crate::cli::LaunchConfig;
+use crate::column::Align;
 use crate::poller;
+use crate::registry::ColumnRegistry;
 
 pub async fn run(launch: LaunchConfig) -> Result<()> {
     if launch.verbose {
@@ -37,7 +39,12 @@ async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     launch: LaunchConfig,
 ) -> Result<()> {
-    let mut app = AppState::new(launch.settings.clone());
+    let registry = ColumnRegistry::load(
+        launch.config_path.as_deref(),
+        launch.no_default_config,
+        launch.settings.default_sort,
+    );
+    let mut app = AppState::new(launch.settings.clone(), registry);
     let (mut updates_rx, refresh_tx) = poller::start(launch.targets, launch.settings.clone());
 
     loop {
@@ -188,7 +195,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         "redis-top  refresh={}  view={:?}  sort={} {}  host={}  filter={}{}",
         humantime::format_duration(app.settings.refresh_interval),
         app.view_mode,
-        app.sort_mode.label(),
+        app.sort_label(),
         sort_direction_symbol(app.sort_direction),
         if app.force_show_host {
             "shown"
@@ -208,23 +215,26 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(header, chunks[0]);
 
     let rows = app.visible_rows();
-    let show_address = app.show_address_column();
+    let column_keys = app.visible_column_keys();
+    let columns: Vec<_> = column_keys
+        .iter()
+        .filter_map(|key| app.column_registry.column(key.as_str()))
+        .collect();
+    let widths = compute_column_widths(chunks[1].width.saturating_sub(2), &columns);
+
     let table_rows: Vec<Row<'_>> = rows
         .iter()
         .map(|row| {
-            let mut cells = vec![Cell::from(row.alias_or_addr.clone())];
-            if show_address {
-                cells.push(Cell::from(row.address.clone()));
-            }
-            cells.extend([
-                Cell::from(row.node_type.clone()),
-                Cell::from(row.cluster.clone()),
-                Cell::from(row.memory.clone()),
-                Cell::from(row.ops.clone()),
-                Cell::from(row.lat_last.clone()),
-                Cell::from(row.lat_max.clone()),
-                Cell::from(row.status.clone()),
-            ]);
+            let cells = column_keys
+                .iter()
+                .enumerate()
+                .map(|(idx, key)| {
+                    let width = widths[idx];
+                    let align = columns[idx].align();
+                    let raw = app.render_cell(row, key).unwrap_or_default();
+                    Cell::from(fit_cell_text(&raw, width as usize, align))
+                })
+                .collect::<Vec<Cell<'_>>>();
 
             let base = Row::new(cells);
             if row.stale {
@@ -235,55 +245,17 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         })
         .collect();
 
-    let constraints = if show_address {
-        vec![
-            Constraint::Length(20),
-            Constraint::Length(21),
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Length(20),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(10),
-        ]
-    } else {
-        vec![
-            Constraint::Length(33),
-            Constraint::Length(6),
-            Constraint::Length(7),
-            Constraint::Length(20),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
-            Constraint::Length(10),
-        ]
-    };
-
-    let header = if show_address {
-        Row::new(vec![
-            sortable_header("Alias", app, crate::model::SortMode::Alias),
-            sortable_header("Address", app, crate::model::SortMode::Address),
-            sortable_header("Type", app, crate::model::SortMode::Type),
-            sortable_header("Cluster", app, crate::model::SortMode::Cluster),
-            sortable_header("Memory", app, crate::model::SortMode::Mem),
-            sortable_header("Ops/s", app, crate::model::SortMode::Ops),
-            sortable_header("Lat", app, crate::model::SortMode::Lat),
-            sortable_header("LatMax", app, crate::model::SortMode::LatMax),
-            sortable_header("Status", app, crate::model::SortMode::Status),
-        ])
-    } else {
-        Row::new(vec![
-            sortable_header("Alias", app, crate::model::SortMode::Alias),
-            sortable_header("Type", app, crate::model::SortMode::Type),
-            sortable_header("Cluster", app, crate::model::SortMode::Cluster),
-            sortable_header("Memory", app, crate::model::SortMode::Mem),
-            sortable_header("Ops/s", app, crate::model::SortMode::Ops),
-            sortable_header("Lat", app, crate::model::SortMode::Lat),
-            sortable_header("LatMax", app, crate::model::SortMode::LatMax),
-            sortable_header("Status", app, crate::model::SortMode::Status),
-        ])
-    };
+    let constraints: Vec<Constraint> = widths.into_iter().map(Constraint::Length).collect();
+    let header = Row::new(
+        columns
+            .iter()
+            .zip(column_keys.iter())
+            .map(|(column, key)| {
+                let label = sortable_header(column.header(), app, key);
+                Cell::from(label)
+            })
+            .collect::<Vec<Cell<'_>>>(),
+    );
 
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
     let table = Table::new(table_rows, constraints)
@@ -294,6 +266,94 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let mut state = ratatui::widgets::TableState::default().with_selected(Some(app.selected_index));
     frame.render_stateful_widget(table, chunks[1], &mut state);
+}
+
+fn compute_column_widths(
+    table_width: u16,
+    columns: &[&std::sync::Arc<dyn crate::column::Column>],
+) -> Vec<u16> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
+
+    let mut widths = vec![0u16; columns.len()];
+    let mut remaining = table_width;
+
+    for (idx, column) in columns.iter().enumerate() {
+        let hint = column.width_hint();
+        if let Some(fixed) = hint.fixed {
+            widths[idx] = fixed;
+            remaining = remaining.saturating_sub(fixed);
+        }
+    }
+
+    for (idx, column) in columns.iter().enumerate() {
+        if widths[idx] > 0 {
+            continue;
+        }
+        let min = column.width_hint().min;
+        widths[idx] = min;
+        remaining = remaining.saturating_sub(min);
+    }
+
+    loop {
+        if remaining == 0 {
+            break;
+        }
+        let mut progressed = false;
+        for (idx, column) in columns.iter().enumerate() {
+            let hint = column.width_hint();
+            if hint.fixed.is_some() {
+                continue;
+            }
+            let max = hint.max.unwrap_or(u16::MAX);
+            let ideal = hint.ideal.min(max);
+            if widths[idx] < ideal {
+                widths[idx] = widths[idx].saturating_add(1);
+                remaining = remaining.saturating_sub(1);
+                progressed = true;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+
+    widths
+}
+
+fn fit_cell_text(text: &str, width: usize, align: Align) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut chars = text.chars().collect::<Vec<char>>();
+    if chars.len() > width {
+        chars.truncate(width);
+    }
+    let truncated: String = chars.into_iter().collect();
+    let len = truncated.chars().count();
+    if len >= width {
+        return truncated;
+    }
+    let pad = width - len;
+    match align {
+        Align::Left => format!("{truncated}{:pad$}", "", pad = pad),
+        Align::Right => format!("{:pad$}{truncated}", "", pad = pad),
+        Align::Center => {
+            let left = pad / 2;
+            let right = pad - left;
+            format!(
+                "{:left$}{truncated}{:right$}",
+                "",
+                "",
+                left = left,
+                right = right
+            )
+        }
+    }
 }
 
 fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
@@ -594,8 +654,8 @@ fn sort_direction_symbol(direction: crate::model::SortDirection) -> &'static str
     }
 }
 
-fn sortable_header(label: &str, app: &AppState, column: crate::model::SortMode) -> String {
-    if app.sort_mode == column {
+fn sortable_header(label: &str, app: &AppState, column_key: &str) -> String {
+    if app.sort_by == column_key {
         format!("{label} {}", sort_direction_symbol(app.sort_direction))
     } else {
         label.to_string()
@@ -614,13 +674,18 @@ fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) 
     let columns = app.sortable_columns();
     let rows: Vec<Row<'_>> = columns
         .iter()
-        .map(|column| {
-            let direction = if *column == app.sort_mode {
+        .map(|column_key| {
+            let direction = if *column_key == app.sort_by {
                 format!(" ({})", sort_direction_symbol(app.sort_direction))
             } else {
                 String::new()
             };
-            Row::new(vec![Cell::from(format!("{}{}", column.label(), direction))])
+            let label = app
+                .column_registry
+                .column(column_key)
+                .map(|column| column.header().to_string())
+                .unwrap_or_else(|| column_key.clone());
+            Row::new(vec![Cell::from(format!("{label}{direction}"))])
         })
         .collect();
     let table = Table::new(rows, [Constraint::Percentage(100)])

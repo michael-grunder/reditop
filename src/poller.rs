@@ -149,6 +149,7 @@ async fn poll_one(
 
 fn apply_info_to_state(state: &mut InstanceState, info_raw: &str) {
     let info = parse_info(info_raw);
+    state.info = info.flat_map();
 
     state.used_memory_bytes = info.get_u64("memory", "used_memory");
     state.maxmemory_bytes = info.get_u64("memory", "maxmemory");

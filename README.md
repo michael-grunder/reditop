@@ -6,16 +6,11 @@
 
 - Polls one or more Redis targets every second (default, configurable)
 - Overview screen with:
-  - alias/address
-  - type
-  - cluster group
-  - memory usage (`used` or `used/maxmemory` when configured)
-  - ops/sec
-  - last/max latency
-  - status
+  - generic, configurable columns (INFO-backed + calculated)
+  - defaults for alias/address/type/cluster/memory/ops/latency/status
 - Detail screen with summary, latency, and raw `INFO`
 - Tree and flat overview modes
-- Sorting and substring filtering
+- Sorting by currently visible column keys and substring filtering
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
 - Config loading from TOML + CLI target merge
 - Handles per-instance failures without crashing UI
@@ -108,4 +103,24 @@ alias = "local"
 addr = "127.0.0.1:6379"
 protocol = "tcp"
 enabled = true
+
+[columns.used_mem]
+type = "info"
+header = "Mem"
+info_key = "used_memory"
+value_type = "bytes"
+format = "bytes_human"
+
+[columns.maxmem_pct]
+type = "calc"
+header = "%MaxMem"
+calc = "maxmemory_percent"
+format = "pct:1"
+
+[view.overview]
+visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "lat_max", "status"]
+
+[view.overview.sort]
+by = "ops"
+dir = "desc"
 ```

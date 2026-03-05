@@ -1,5 +1,7 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
+
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -29,25 +31,11 @@ pub enum SortMode {
     Status,
 }
 
-impl SortMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Alias => "Alias",
-            Self::Address => "Address",
-            Self::Type => "Type",
-            Self::Cluster => "Cluster",
-            Self::Mem => "Memory",
-            Self::Ops => "Ops/s",
-            Self::Lat => "Lat",
-            Self::LatMax => "LatMax",
-            Self::Status => "Status",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum SortDirection {
+    #[serde(rename = "asc")]
     Asc,
+    #[serde(rename = "desc")]
     Desc,
 }
 
@@ -167,6 +155,7 @@ pub struct InstanceState {
     pub cluster_id: Option<String>,
     pub parent_addr: Option<String>,
     pub tags: Vec<String>,
+    pub info: HashMap<String, String>,
     pub used_memory_bytes: Option<u64>,
     pub maxmemory_bytes: Option<u64>,
     pub ops_per_sec: Option<u64>,
@@ -190,6 +179,7 @@ impl InstanceState {
             cluster_id: None,
             parent_addr: None,
             tags: Vec::new(),
+            info: HashMap::new(),
             used_memory_bytes: None,
             maxmemory_bytes: None,
             ops_per_sec: None,

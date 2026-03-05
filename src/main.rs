@@ -1,10 +1,13 @@
 mod app;
 mod cli;
 mod cluster;
+mod column;
+mod columns;
 mod config;
 mod model;
 mod parse;
 mod poller;
+mod registry;
 mod target_addr;
 mod topology;
 mod tui;
