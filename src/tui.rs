@@ -254,7 +254,11 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             .redis_version
             .clone()
             .unwrap_or_else(|| "-".to_string()),
-        instance.detail.uptime_seconds.unwrap_or(0)
+        instance
+            .detail
+            .uptime_seconds
+            .map(format_with_commas)
+            .unwrap_or_else(|| "-".to_string())
     );
     frame.render_widget(
         Paragraph::new(title).block(Block::default().borders(Borders::ALL).title("Instance")),
@@ -276,23 +280,50 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             } else {
                 hits as f64 / (hits + misses) as f64 * 100.0
             };
-            let body = format!(
-                "used_memory={}\nused_memory_rss={}\nmaxmemory={}\nops/s={}\ncommands={}\nconnected_clients={} blocked_clients={}\nhits={} misses={} hit_rate={:.1}%\nevicted={} expired={}\nmaster_host={:?} master_port={:?}",
-                instance.used_memory_bytes.unwrap_or(0),
-                instance.detail.used_memory_rss.unwrap_or(0),
-                instance.maxmemory_bytes.unwrap_or(0),
-                instance.ops_per_sec.unwrap_or(0),
-                instance.detail.total_commands_processed.unwrap_or(0),
-                instance.detail.connected_clients.unwrap_or(0),
-                instance.detail.blocked_clients.unwrap_or(0),
-                hits,
-                misses,
-                hit_rate,
-                instance.detail.evicted_keys.unwrap_or(0),
-                instance.detail.expired_keys.unwrap_or(0),
-                instance.detail.master_host,
-                instance.detail.master_port
-            );
+            let replication_source = match (
+                instance.detail.master_host.as_deref(),
+                instance.detail.master_port,
+            ) {
+                (Some(host), Some(port)) => format!("{host}:{port}"),
+                (Some(host), None) => host.to_string(),
+                _ => "-".to_string(),
+            };
+            let body = format_aligned_rows(&[
+                (
+                    "used_memory",
+                    format_optional_bytes(instance.used_memory_bytes),
+                ),
+                (
+                    "used_memory_rss",
+                    format_optional_bytes(instance.detail.used_memory_rss),
+                ),
+                ("maxmemory", format_optional_bytes(instance.maxmemory_bytes)),
+                ("ops_per_sec", format_optional_u64(instance.ops_per_sec)),
+                (
+                    "commands",
+                    format_optional_u64(instance.detail.total_commands_processed),
+                ),
+                (
+                    "connected_clients",
+                    format_optional_u64(instance.detail.connected_clients),
+                ),
+                (
+                    "blocked_clients",
+                    format_optional_u64(instance.detail.blocked_clients),
+                ),
+                ("hits", format_with_commas(hits)),
+                ("misses", format_with_commas(misses)),
+                ("hit_rate", format!("{hit_rate:.1}%")),
+                (
+                    "evicted_keys",
+                    format_optional_u64(instance.detail.evicted_keys),
+                ),
+                (
+                    "expired_keys",
+                    format_optional_u64(instance.detail.expired_keys),
+                ),
+                ("master", replication_source),
+            ]);
             frame.render_widget(
                 Paragraph::new(body)
                     .block(Block::default().borders(Borders::ALL).title("Summary"))
@@ -301,16 +332,21 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             );
         }
         1 => {
-            let body = format!(
-                "last_latency_ms={}\nmax_latency_ms={:.2}\navg_latency_ms={:.2}\nwindow_samples={}",
-                instance
-                    .last_latency_ms
-                    .map(|v| format!("{v:.2}"))
-                    .unwrap_or_else(|| "-".to_string()),
-                instance.max_latency_ms,
-                instance.avg_latency_ms,
-                instance.latency_window.len()
-            );
+            let body = format_aligned_rows(&[
+                (
+                    "last_latency_ms",
+                    instance
+                        .last_latency_ms
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                ("max_latency_ms", format!("{:.2}", instance.max_latency_ms)),
+                ("avg_latency_ms", format!("{:.2}", instance.avg_latency_ms)),
+                (
+                    "window_samples",
+                    format_with_commas(instance.latency_window.len() as u64),
+                ),
+            ]);
             frame.render_widget(
                 Paragraph::new(body).block(Block::default().borders(Borders::ALL).title("Latency")),
                 chunks[2],
@@ -329,6 +365,55 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState) {
                 chunks[2],
             );
         }
+    }
+}
+
+fn format_aligned_rows(rows: &[(&str, String)]) -> String {
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    rows.iter()
+        .map(|(label, value)| format!("{label:width$} : {value}", width = width))
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(format_with_commas)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_bytes(value: Option<u64>) -> String {
+    value
+        .map(|bytes| format!("{} ({})", format_with_commas(bytes), human_bytes(bytes)))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_with_commas(value: u64) -> String {
+    let digits = value.to_string();
+    let rev = digits.chars().rev().collect::<Vec<char>>();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (idx, ch) in rev.iter().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*ch);
+    }
+    out.chars().rev().collect()
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut idx = 0;
+    while value >= 1024.0 && idx + 1 < UNITS.len() {
+        value /= 1024.0;
+        idx += 1;
+    }
+
+    if idx == 0 {
+        format!("{bytes} {}", UNITS[idx])
+    } else {
+        format!("{value:.1} {}", UNITS[idx])
     }
 }
 
@@ -365,4 +450,23 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_aligned_rows, format_with_commas};
+
+    #[test]
+    fn format_with_commas_groups_digits() {
+        assert_eq!(format_with_commas(0), "0");
+        assert_eq!(format_with_commas(12), "12");
+        assert_eq!(format_with_commas(1_234), "1,234");
+        assert_eq!(format_with_commas(12_345_678), "12,345,678");
+    }
+
+    #[test]
+    fn format_aligned_rows_uses_consistent_label_column() {
+        let body = format_aligned_rows(&[("a", "1".to_string()), ("long_name", "2".to_string())]);
+        assert_eq!(body, "a         : 1\nlong_name : 2");
+    }
 }

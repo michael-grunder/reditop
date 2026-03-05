@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
 - Updated CLI binary name/docs to `reditop`.
+- Updated detail view metric rendering to aligned key/value columns with thousands-separated numeric formatting for readability.
 ### Deprecated
 ### Removed
 ### Fixed
