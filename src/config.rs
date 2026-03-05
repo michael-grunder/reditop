@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
+use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, UiColor, UiTheme, ViewMode};
 use crate::target_addr::normalize_tcp_addr;
 
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
     global: Option<GlobalConfig>,
+    theme: Option<ThemeConfig>,
     targets: Option<Vec<ConfigTarget>>,
 }
 
@@ -35,6 +36,16 @@ struct ConfigTarget {
     enabled: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ThemeConfig {
+    background_color: Option<String>,
+    foreground_color: Option<String>,
+    carat_color: Option<String>,
+    caret_color: Option<String>,
+    warning_color: Option<String>,
+    critical_color: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeOverrides {
     pub refresh_interval_ms: Option<u64>,
@@ -43,6 +54,7 @@ pub struct RuntimeOverrides {
     pub concurrency_limit: Option<usize>,
     pub view_default: Option<ViewMode>,
     pub sort_default: Option<SortMode>,
+    pub ui_theme: Option<UiTheme>,
 }
 
 pub fn default_settings() -> RuntimeSettings {
@@ -53,6 +65,7 @@ pub fn default_settings() -> RuntimeSettings {
         concurrency_limit: 16,
         default_view: ViewMode::Tree,
         default_sort: SortMode::Address,
+        ui_theme: UiTheme::default(),
     }
 }
 
@@ -125,6 +138,7 @@ pub fn load_config(
             concurrency_limit: global.concurrency_limit,
             view_default: parse_view(global.view_default.as_deref())?,
             sort_default: parse_sort(global.sort_default.as_deref())?,
+            ui_theme: parse_theme(parsed.theme)?,
         },
         targets,
     ))
@@ -148,6 +162,9 @@ pub fn apply_overrides(mut base: RuntimeSettings, overrides: &RuntimeOverrides) 
     }
     if let Some(sort) = overrides.sort_default {
         base.default_sort = sort;
+    }
+    if let Some(theme) = overrides.ui_theme {
+        base.ui_theme = theme;
     }
     base
 }
@@ -206,4 +223,112 @@ fn parse_sort(raw: Option<&str>) -> Result<Option<SortMode>> {
         Some("status") => Some(SortMode::Status),
         Some(other) => bail!("invalid sort_default: {other}"),
     })
+}
+
+fn parse_theme(raw: Option<ThemeConfig>) -> Result<Option<UiTheme>> {
+    let Some(theme_raw) = raw else {
+        return Ok(None);
+    };
+
+    let mut theme = UiTheme::default();
+    if let Some(raw_color) = theme_raw.background_color.as_deref() {
+        theme.background = parse_color(raw_color, "theme.background_color")?;
+    }
+    if let Some(raw_color) = theme_raw.foreground_color.as_deref() {
+        theme.foreground = parse_color(raw_color, "theme.foreground_color")?;
+    }
+    if let Some(raw_color) = theme_raw.warning_color.as_deref() {
+        theme.warning = parse_color(raw_color, "theme.warning_color")?;
+    }
+    if let Some(raw_color) = theme_raw.critical_color.as_deref() {
+        theme.critical = parse_color(raw_color, "theme.critical_color")?;
+    }
+    if let Some(raw_color) = theme_raw.caret_color.as_deref() {
+        theme.carat = parse_color(raw_color, "theme.caret_color")?;
+    }
+    if let Some(raw_color) = theme_raw.carat_color.as_deref() {
+        theme.carat = parse_color(raw_color, "theme.carat_color")?;
+    }
+    Ok(Some(theme))
+}
+
+fn parse_color(raw: &str, field: &str) -> Result<UiColor> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "black" => Ok(UiColor::Black),
+        "red" => Ok(UiColor::Red),
+        "green" => Ok(UiColor::Green),
+        "yellow" => Ok(UiColor::Yellow),
+        "blue" => Ok(UiColor::Blue),
+        "magenta" => Ok(UiColor::Magenta),
+        "cyan" => Ok(UiColor::Cyan),
+        "gray" | "grey" => Ok(UiColor::Gray),
+        "white" => Ok(UiColor::White),
+        _ => bail!(
+            "invalid color for {field}: {raw} (supported: black, red, green, yellow, blue, magenta, cyan, gray, white)"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{apply_overrides, default_settings, load_config};
+    use crate::model::{UiColor, UiTheme};
+
+    #[test]
+    fn default_settings_include_default_theme() {
+        let settings = default_settings();
+        assert_eq!(settings.ui_theme, UiTheme::default());
+    }
+
+    #[test]
+    fn load_config_parses_theme_colors() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[theme]
+background_color = "blue"
+foreground_color = "gray"
+carat_color = "yellow"
+warning_color = "magenta"
+critical_color = "red"
+"#,
+        )
+        .expect("write config");
+
+        let (overrides, targets) = load_config(Some(&path), false).expect("load config");
+        assert!(targets.is_empty());
+
+        let settings = apply_overrides(default_settings(), &overrides);
+        assert_eq!(settings.refresh_interval, Duration::from_secs(1));
+        assert_eq!(settings.ui_theme.background, UiColor::Blue);
+        assert_eq!(settings.ui_theme.foreground, UiColor::Gray);
+        assert_eq!(settings.ui_theme.carat, UiColor::Yellow);
+        assert_eq!(settings.ui_theme.warning, UiColor::Magenta);
+        assert_eq!(settings.ui_theme.critical, UiColor::Red);
+    }
+
+    #[test]
+    fn load_config_theme_defaults_missing_values() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[theme]
+foreground_color = "cyan"
+"#,
+        )
+        .expect("write config");
+
+        let (overrides, _) = load_config(Some(&path), false).expect("load config");
+        let settings = apply_overrides(default_settings(), &overrides);
+        assert_eq!(settings.ui_theme.background, UiColor::Black);
+        assert_eq!(settings.ui_theme.foreground, UiColor::Cyan);
+        assert_eq!(settings.ui_theme.carat, UiColor::White);
+    }
 }

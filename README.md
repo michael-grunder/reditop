@@ -118,6 +118,13 @@ concurrency_limit = 16
 view_default = "tree"
 sort_default = "address"
 
+[theme]
+background_color = "black"
+foreground_color = "white"
+carat_color = "white"
+warning_color = "yellow"
+critical_color = "red"
+
 [[targets]]
 alias = "local"
 addr = "127.0.0.1:6379"
@@ -144,3 +151,6 @@ visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "l
 by = "ops"
 dir = "desc"
 ```
+
+`[theme]` colors support: `black`, `red`, `green`, `yellow`, `blue`,
+`magenta`, `cyan`, `gray`/`grey`, `white`.

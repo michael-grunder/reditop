@@ -537,7 +537,7 @@ fn root_kind_rank(kind: InstanceType) -> u8 {
 mod tests {
     use super::{AppState, FilterPromptMode};
     use crate::model::{
-        InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, ViewMode,
+        InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, UiTheme, ViewMode,
     };
     use crate::registry::ColumnRegistry;
     use std::collections::HashMap;
@@ -551,6 +551,7 @@ mod tests {
             concurrency_limit: 4,
             default_view: ViewMode::Tree,
             default_sort: SortMode::Address,
+            ui_theme: UiTheme::default(),
         }
     }
 

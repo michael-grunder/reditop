@@ -10,7 +10,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
 
 use crate::app::{ActiveView, AppState, FilterPromptMode};
@@ -164,6 +164,7 @@ async fn run_loop(
 
 fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let area = frame.area();
+    frame.render_widget(Block::default().style(base_style(app)), area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(2)])
@@ -172,7 +173,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     match app.active_view {
         ActiveView::Overview => draw_overview(frame, app, chunks[0]),
         ActiveView::Detail => draw_detail(frame, app, chunks[0]),
-        ActiveView::Help => draw_help_page(frame, chunks[0]),
+        ActiveView::Help => draw_help_page(frame, app, chunks[0]),
     }
     draw_status_bar(frame, app, chunks[1]);
 
@@ -181,7 +182,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     }
 
     if app.show_help {
-        draw_help_overlay(frame, area);
+        draw_help_overlay(frame, app, area);
     }
 }
 
@@ -211,7 +212,13 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         },
         if app.is_filtering { " (editing)" } else { "" }
     ))
-    .block(Block::default().borders(Borders::ALL).title("Overview"));
+    .style(base_style(app))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Overview")
+            .style(base_style(app)),
+    );
     frame.render_widget(header, chunks[0]);
 
     let rows = app.visible_rows();
@@ -238,9 +245,9 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
             let base = Row::new(cells);
             if row.stale {
-                base.style(Style::default().add_modifier(Modifier::DIM))
+                base.style(base_style(app).add_modifier(Modifier::DIM))
             } else {
-                base
+                base.style(base_style(app))
             }
         })
         .collect();
@@ -255,12 +262,20 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 Cell::from(label)
             })
             .collect::<Vec<Cell<'_>>>(),
-    );
+    )
+    .style(base_style(app).add_modifier(Modifier::BOLD));
 
-    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
+    let selected_style = Style::default()
+        .fg(carat_color(app))
+        .bg(background_color(app))
+        .add_modifier(Modifier::BOLD);
     let table = Table::new(table_rows, constraints)
         .header(header)
-        .block(Block::default().borders(Borders::ALL))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(base_style(app)),
+        )
         .row_highlight_style(selected_style)
         .highlight_symbol("> ");
 
@@ -360,7 +375,13 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let Some(selected_key) = app.selected_key() else {
         frame.render_widget(
             Paragraph::new("No instance selected")
-                .block(Block::default().borders(Borders::ALL).title("Detail")),
+                .style(base_style(app))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Detail")
+                        .style(base_style(app)),
+                ),
             area,
         );
         return;
@@ -399,14 +420,29 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             .unwrap_or_else(|| "-".to_string())
     );
     frame.render_widget(
-        Paragraph::new(title).block(Block::default().borders(Borders::ALL).title("Instance")),
+        Paragraph::new(title).style(base_style(app)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Instance")
+                .style(base_style(app)),
+        ),
         chunks[0],
     );
 
     let tabs = Tabs::new(vec!["Summary", "Latency", "Info Raw"])
-        .block(Block::default().borders(Borders::ALL))
+        .style(base_style(app))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(base_style(app)),
+        )
         .select(app.detail_tab)
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+        .highlight_style(
+            Style::default()
+                .fg(carat_color(app))
+                .bg(background_color(app))
+                .add_modifier(Modifier::BOLD),
+        );
     frame.render_widget(tabs, chunks[1]);
 
     match app.detail_tab {
@@ -464,7 +500,13 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             ]);
             frame.render_widget(
                 Paragraph::new(body)
-                    .block(Block::default().borders(Borders::ALL).title("Summary"))
+                    .style(base_style(app))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Summary")
+                            .style(base_style(app)),
+                    )
                     .wrap(Wrap { trim: false }),
                 chunks[2],
             );
@@ -486,7 +528,12 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 ),
             ]);
             frame.render_widget(
-                Paragraph::new(body).block(Block::default().borders(Borders::ALL).title("Latency")),
+                Paragraph::new(body).style(base_style(app)).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Latency")
+                        .style(base_style(app)),
+                ),
                 chunks[2],
             );
         }
@@ -498,7 +545,13 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 .unwrap_or_else(|| "INFO not available".to_string());
             frame.render_widget(
                 Paragraph::new(body)
-                    .block(Block::default().borders(Borders::ALL).title("Info Raw"))
+                    .style(base_style(app))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Info Raw")
+                            .style(base_style(app)),
+                    )
                     .wrap(Wrap { trim: false }),
                 chunks[2],
             );
@@ -555,19 +608,20 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-fn draw_help_page(frame: &mut ratatui::Frame<'_>, area: Rect) {
+fn draw_help_page(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let rows: Vec<Row<'_>> = help_bindings()
         .iter()
         .map(|(keys, action)| Row::new(vec![Cell::from(*keys), Cell::from(*action)]))
         .collect();
     let table = Table::new(rows, [Constraint::Length(24), Constraint::Min(20)])
         .header(
-            Row::new(vec!["Keys", "Action"]).style(Style::default().add_modifier(Modifier::BOLD)),
+            Row::new(vec!["Keys", "Action"]).style(base_style(app).add_modifier(Modifier::BOLD)),
         )
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Help (Esc to go back)"),
+                .title("Help (Esc to go back)")
+                .style(base_style(app)),
         );
     frame.render_widget(table, area);
 }
@@ -588,11 +642,11 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     } else {
         String::new()
     };
-    frame.render_widget(Paragraph::new(prompt), lines[0]);
+    frame.render_widget(Paragraph::new(prompt).style(base_style(app)), lines[0]);
 
     frame.render_widget(
         Paragraph::new("F1Help  F3Search  F4Filter  F5Tree  F6SortBy")
-            .style(Style::default().add_modifier(Modifier::REVERSED)),
+            .style(base_style(app).add_modifier(Modifier::BOLD)),
         lines[1],
     );
 }
@@ -627,7 +681,7 @@ fn help_bindings() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
+fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let width = area.width.saturating_mul(80) / 100;
     let height = area.height.saturating_mul(70) / 100;
     let popup = Rect {
@@ -641,7 +695,13 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let text = "q quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
-            .block(Block::default().borders(Borders::ALL).title("Help"))
+            .style(base_style(app))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Help")
+                    .style(base_style(app)),
+            )
             .wrap(Wrap { trim: false }),
         popup,
     );
@@ -692,15 +752,40 @@ fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) 
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Sort By (Enter select, Esc cancel)"),
+                .title("Sort By (Enter select, Esc cancel)")
+                .style(base_style(app)),
         )
-        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .style(base_style(app))
+        .row_highlight_style(
+            Style::default()
+                .fg(carat_color(app))
+                .bg(background_color(app))
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("> ");
     let mut state =
         ratatui::widgets::TableState::default().with_selected(Some(app.sort_picker_index));
 
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(table, popup, &mut state);
+}
+
+fn base_style(app: &AppState) -> Style {
+    Style::default()
+        .fg(foreground_color(app))
+        .bg(background_color(app))
+}
+
+fn background_color(app: &AppState) -> Color {
+    app.settings.ui_theme.background.to_ratatui_color()
+}
+
+fn foreground_color(app: &AppState) -> Color {
+    app.settings.ui_theme.foreground.to_ratatui_color()
+}
+
+fn carat_color(app: &AppState) -> Color {
+    app.settings.ui_theme.carat.to_ratatui_color()
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {

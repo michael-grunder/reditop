@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a generic overview column system with pluggable column trait, sortable typed sort keys, width/alignment metadata, and per-column rendering helpers.
 - Added built-in configurable column registry (`default_columns.toml`) with `info` and `calc` column kinds plus config-driven visible column/sort selection.
 - Added INFO flat key map snapshots on each instance update to support generic INFO column extraction.
+- Added configurable TUI theme settings via `[theme]` (`background_color`, `foreground_color`, `carat_color`, `warning_color`, `critical_color`).
 ### Changed
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
@@ -40,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced hard-coded overview table rendering with config-resolved column rendering and dynamic width distribution based on column width hints.
 - Reworked overview sorting to use selected column keys from the registry instead of fixed enum-only columns.
 - Extended config support to read `[columns.*]` and `[view.overview]` for column definitions, visible list, and default sort (`by`/`dir`).
+- Updated TUI styling to use configured foreground/background/carat colors and removed reverse-video selected-row default.
 ### Deprecated
 ### Removed
 ### Fixed

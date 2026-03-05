@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use ratatui::style::Color;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,57 @@ pub struct RuntimeSettings {
     pub concurrency_limit: usize,
     pub default_view: ViewMode,
     pub default_sort: SortMode,
+    pub ui_theme: UiTheme,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiColor {
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    Gray,
+    White,
+}
+
+impl UiColor {
+    pub fn to_ratatui_color(self) -> Color {
+        match self {
+            Self::Black => Color::Black,
+            Self::Red => Color::Red,
+            Self::Green => Color::Green,
+            Self::Yellow => Color::Yellow,
+            Self::Blue => Color::Blue,
+            Self::Magenta => Color::Magenta,
+            Self::Cyan => Color::Cyan,
+            Self::Gray => Color::Gray,
+            Self::White => Color::White,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiTheme {
+    pub background: UiColor,
+    pub foreground: UiColor,
+    pub carat: UiColor,
+    pub warning: UiColor,
+    pub critical: UiColor,
+}
+
+impl Default for UiTheme {
+    fn default() -> Self {
+        Self {
+            background: UiColor::Black,
+            foreground: UiColor::White,
+            carat: UiColor::White,
+            warning: UiColor::Yellow,
+            critical: UiColor::Red,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
