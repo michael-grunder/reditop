@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added project `README.md` with usage, key bindings, CLI examples, and config schema.
 - Added `build.rs`-driven version metadata so `--version` includes build date and git SHA (`-dirty` when applicable).
 - Added a dedicated full-screen help page opened with `H`, including key/action descriptions.
+- Added htop-style bottom key bar with function key labels: `F1 Help`, `F3 Search`, `F4 Filter`, `F5 Tree`, `F6 SortBy`.
 ### Changed
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
@@ -27,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cluster column now shows logical cluster IDs (`1`, `2`, ...) mapped from distinct discovered clusters instead of raw node IDs.
 - Tree view replica branch markers no longer include a leading left padding before `└─`/`├─`.
 - Overview memory display now uses one `Memory` column that shows `used/maxmemory` when maxmemory is configured, otherwise just `used`.
+- Overview now shows live user input in the bottom status bar while search/filter editing is active.
+- Added function-key aliases for existing overview actions (`F1` help, `F5` view toggle, `F6` sort cycle) and wired `F3`/`F4` into search/filter input entry.
 ### Deprecated
 ### Removed
 ### Fixed

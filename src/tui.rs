@@ -13,7 +13,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
 
-use crate::app::{ActiveView, AppState};
+use crate::app::{ActiveView, AppState, FilterPromptMode};
 use crate::cli::LaunchConfig;
 use crate::poller;
 
@@ -73,6 +73,12 @@ async fn run_loop(
                         app.filter.push(ch);
                         app.clamp_selection();
                     }
+                    KeyCode::F(3) if app.active_view == ActiveView::Overview => {
+                        app.start_filter_input(FilterPromptMode::Search, false);
+                    }
+                    KeyCode::F(4) if app.active_view == ActiveView::Overview => {
+                        app.start_filter_input(FilterPromptMode::Filter, true);
+                    }
                     _ => {}
                 }
                 continue;
@@ -80,10 +86,19 @@ async fn run_loop(
 
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
+                KeyCode::F(1) => app.open_help_view(),
                 KeyCode::Char('H') => app.open_help_view(),
                 KeyCode::Char('?') => app.show_help = !app.show_help,
+                KeyCode::F(5) if app.active_view == ActiveView::Overview => {
+                    app.view_mode = app.view_mode.toggle();
+                    app.clamp_selection();
+                }
                 KeyCode::Char('t') if app.active_view == ActiveView::Overview => {
                     app.view_mode = app.view_mode.toggle();
+                    app.clamp_selection();
+                }
+                KeyCode::F(6) if app.active_view == ActiveView::Overview => {
+                    app.sort_mode = app.sort_mode.next();
                     app.clamp_selection();
                 }
                 KeyCode::Char('s') if app.active_view == ActiveView::Overview => {
@@ -94,8 +109,14 @@ async fn run_loop(
                     app.toggle_host_rendering();
                     app.clamp_selection();
                 }
+                KeyCode::F(3) if app.active_view == ActiveView::Overview => {
+                    app.start_filter_input(FilterPromptMode::Search, false);
+                }
+                KeyCode::F(4) if app.active_view == ActiveView::Overview => {
+                    app.start_filter_input(FilterPromptMode::Filter, true);
+                }
                 KeyCode::Char('/') if app.active_view == ActiveView::Overview => {
-                    app.is_filtering = true
+                    app.start_filter_input(FilterPromptMode::Filter, false);
                 }
                 KeyCode::Char('r') => {
                     let _ = refresh_tx.try_send(());
@@ -126,26 +147,28 @@ async fn run_loop(
 }
 
 fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
-    match app.active_view {
-        ActiveView::Overview => draw_overview(frame, app),
-        ActiveView::Detail => draw_detail(frame, app),
-        ActiveView::Help => draw_help_page(frame),
-    }
-
-    if app.show_help {
-        draw_help_overlay(frame, frame.area());
-    }
-}
-
-fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(5),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(5), Constraint::Length(2)])
+        .split(area);
+
+    match app.active_view {
+        ActiveView::Overview => draw_overview(frame, app, chunks[0]),
+        ActiveView::Detail => draw_detail(frame, app, chunks[0]),
+        ActiveView::Help => draw_help_page(frame, chunks[0]),
+    }
+    draw_status_bar(frame, app, chunks[1]);
+
+    if app.show_help {
+        draw_help_overlay(frame, area);
+    }
+}
+
+fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(5)])
         .split(area);
 
     let header = Paragraph::new(format!(
@@ -242,24 +265,14 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState) {
 
     let mut state = ratatui::widgets::TableState::default().with_selected(Some(app.selected_index));
     frame.render_stateful_widget(table, chunks[1], &mut state);
-
-    let status_line = if let Some(key) = app.selected_key() {
-        app.instances
-            .get(&key)
-            .and_then(|instance| instance.last_error.clone())
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    frame.render_widget(Paragraph::new(status_line), chunks[2]);
 }
 
-fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState) {
+fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let Some(selected_key) = app.selected_key() else {
         frame.render_widget(
             Paragraph::new("No instance selected")
                 .block(Block::default().borders(Borders::ALL).title("Detail")),
-            frame.area(),
+            area,
         );
         return;
     };
@@ -267,7 +280,6 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         return;
     };
 
-    let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -454,7 +466,7 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-fn draw_help_page(frame: &mut ratatui::Frame<'_>) {
+fn draw_help_page(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let rows: Vec<Row<'_>> = help_bindings()
         .iter()
         .map(|(keys, action)| Row::new(vec![Cell::from(*keys), Cell::from(*action)]))
@@ -468,12 +480,38 @@ fn draw_help_page(frame: &mut ratatui::Frame<'_>) {
                 .borders(Borders::ALL)
                 .title("Help (Esc to go back)"),
         );
-    frame.render_widget(table, frame.area());
+    frame.render_widget(table, area);
+}
+
+fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    let lines = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(area);
+
+    let prompt = if app.is_filtering {
+        format!("{}: {}", app.filter_prompt_mode.label(), app.filter)
+    } else if let Some(key) = app.selected_key() {
+        app.instances
+            .get(&key)
+            .and_then(|instance| instance.last_error.clone())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    frame.render_widget(Paragraph::new(prompt), lines[0]);
+
+    frame.render_widget(
+        Paragraph::new("F1Help  F3Search  F4Filter  F5Tree  F6SortBy")
+            .style(Style::default().add_modifier(Modifier::REVERSED)),
+        lines[1],
+    );
 }
 
 fn help_bindings() -> &'static [(&'static str, &'static str)] {
     &[
         ("q", "Quit"),
+        ("F1", "Open full help page"),
         ("H", "Open this help page"),
         ("Esc", "Back from detail/help or stop filter editing"),
         ("Enter", "Open detail view from overview"),
@@ -482,6 +520,13 @@ fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ("Up/Down", "Move selection in overview"),
         ("?", "Toggle help overlay"),
         ("r", "Refresh now"),
+        ("F3", "Start search input in overview"),
+        (
+            "F4",
+            "Start filter input in overview (clears existing filter)",
+        ),
+        ("F5", "Toggle flat/tree view in overview"),
+        ("F6", "Cycle sort mode in overview"),
         ("t", "Toggle flat/tree view in overview"),
         ("s", "Cycle sort mode in overview"),
         (
@@ -504,7 +549,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quit\nH open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nt toggle flat/tree\ns toggle sort\nh toggle host rendering\n/ filter in overview";
+    let text = "q quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 toggle sort\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title("Help"))
@@ -549,5 +594,14 @@ mod tests {
     #[test]
     fn help_bindings_include_help_page_shortcut() {
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "H"));
+    }
+
+    #[test]
+    fn help_bindings_include_function_keys() {
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "F1"));
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "F3"));
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "F4"));
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "F5"));
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "F6"));
     }
 }

@@ -12,6 +12,21 @@ pub enum ActiveView {
     Help,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterPromptMode {
+    Search,
+    Filter,
+}
+
+impl FilterPromptMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Search => "Search",
+            Self::Filter => "Filter",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DisplayRow {
     pub key: String,
@@ -33,6 +48,7 @@ pub struct AppState {
     pub sort_mode: SortMode,
     pub filter: String,
     pub is_filtering: bool,
+    pub filter_prompt_mode: FilterPromptMode,
     pub show_help: bool,
     pub active_view: ActiveView,
     pub previous_view: ActiveView,
@@ -57,6 +73,7 @@ impl AppState {
             settings,
             filter: String::new(),
             is_filtering: false,
+            filter_prompt_mode: FilterPromptMode::Filter,
             show_help: false,
             active_view: ActiveView::Overview,
             previous_view: ActiveView::Overview,
@@ -109,6 +126,15 @@ impl AppState {
 
     pub fn close_help_view(&mut self) {
         self.active_view = self.previous_view;
+    }
+
+    pub fn start_filter_input(&mut self, mode: FilterPromptMode, clear_existing: bool) {
+        self.filter_prompt_mode = mode;
+        if clear_existing {
+            self.filter.clear();
+        }
+        self.is_filtering = true;
+        self.clamp_selection();
     }
 
     pub fn visible_rows(&self) -> Vec<DisplayRow> {
@@ -425,7 +451,7 @@ fn compact_instance_type(kind: InstanceType) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, format_memory_usage};
+    use super::{AppState, FilterPromptMode, format_memory_usage};
     use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
     use std::collections::HashMap;
     use std::time::Duration;
@@ -537,5 +563,21 @@ mod tests {
         assert_eq!(format_memory_usage(Some(1024 * 2), Some(0)), "2.0 KiB");
         assert_eq!(format_memory_usage(Some(1024 * 2), None), "2.0 KiB");
         assert_eq!(format_memory_usage(None, Some(1024 * 2)), "-");
+    }
+
+    #[test]
+    fn start_filter_input_sets_mode_and_clear_behavior() {
+        let mut app = AppState::new(settings());
+        app.filter = "redis".to_string();
+
+        app.start_filter_input(FilterPromptMode::Search, false);
+        assert!(app.is_filtering);
+        assert_eq!(app.filter_prompt_mode, FilterPromptMode::Search);
+        assert_eq!(app.filter, "redis");
+
+        app.start_filter_input(FilterPromptMode::Filter, true);
+        assert!(app.is_filtering);
+        assert_eq!(app.filter_prompt_mode, FilterPromptMode::Filter);
+        assert!(app.filter.is_empty());
     }
 }

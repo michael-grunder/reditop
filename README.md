@@ -16,12 +16,18 @@
 - Detail screen with summary, latency, and raw `INFO`
 - Tree and flat overview modes
 - Sorting and substring filtering
+- Bottom status/key bar with htop-style function key labels and live search/filter input echo
 - Config loading from TOML + CLI target merge
 - Handles per-instance failures without crashing UI
 
 ## Key Bindings
 
 - `q`: quit
+- `F1`: open full help page
+- `F3`: start search input (overview)
+- `F4`: start filter input and clear existing filter (overview)
+- `F5`: toggle tree/flat (overview)
+- `F6`: cycle sort mode (overview)
 - `H`: open full help page
 - `?`: toggle help
 - `Up/Down`: move selection
