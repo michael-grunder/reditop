@@ -84,6 +84,17 @@ async fn run_loop(
                 continue;
             }
 
+            if app.is_sorting {
+                match key.code {
+                    KeyCode::Esc => app.close_sort_picker(),
+                    KeyCode::Up => app.move_sort_picker_selection(-1),
+                    KeyCode::Down => app.move_sort_picker_selection(1),
+                    KeyCode::Enter => app.apply_sort_picker_selection(),
+                    _ => {}
+                }
+                continue;
+            }
+
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
                 KeyCode::F(1) => app.open_help_view(),
@@ -98,12 +109,10 @@ async fn run_loop(
                     app.clamp_selection();
                 }
                 KeyCode::F(6) if app.active_view == ActiveView::Overview => {
-                    app.sort_mode = app.sort_mode.next();
-                    app.clamp_selection();
+                    app.open_sort_picker();
                 }
                 KeyCode::Char('s') if app.active_view == ActiveView::Overview => {
-                    app.sort_mode = app.sort_mode.next();
-                    app.clamp_selection();
+                    app.cycle_sort_mode();
                 }
                 KeyCode::Char('h') if app.active_view == ActiveView::Overview => {
                     app.toggle_host_rendering();
@@ -160,6 +169,10 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     }
     draw_status_bar(frame, app, chunks[1]);
 
+    if app.is_sorting {
+        draw_sort_picker(frame, area, app);
+    }
+
     if app.show_help {
         draw_help_overlay(frame, area);
     }
@@ -172,10 +185,11 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         .split(area);
 
     let header = Paragraph::new(format!(
-        "redis-top  refresh={}  view={:?}  sort={:?}  host={}  filter={}{}",
+        "redis-top  refresh={}  view={:?}  sort={} {}  host={}  filter={}{}",
         humantime::format_duration(app.settings.refresh_interval),
         app.view_mode,
-        app.sort_mode,
+        app.sort_mode.label(),
+        sort_direction_symbol(app.sort_direction),
         if app.force_show_host {
             "shown"
         } else if app.should_omit_host_in_rendering() {
@@ -248,11 +262,26 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let header = if show_address {
         Row::new(vec![
-            "Alias", "Address", "Type", "Cluster", "Memory", "Ops/s", "Lat", "LatMax", "Status",
+            sortable_header("Alias", app, crate::model::SortMode::Alias),
+            sortable_header("Address", app, crate::model::SortMode::Address),
+            sortable_header("Type", app, crate::model::SortMode::Type),
+            sortable_header("Cluster", app, crate::model::SortMode::Cluster),
+            sortable_header("Memory", app, crate::model::SortMode::Mem),
+            sortable_header("Ops/s", app, crate::model::SortMode::Ops),
+            sortable_header("Lat", app, crate::model::SortMode::Lat),
+            sortable_header("LatMax", app, crate::model::SortMode::LatMax),
+            sortable_header("Status", app, crate::model::SortMode::Status),
         ])
     } else {
         Row::new(vec![
-            "Alias", "Type", "Cluster", "Memory", "Ops/s", "Lat", "LatMax", "Status",
+            sortable_header("Alias", app, crate::model::SortMode::Alias),
+            sortable_header("Type", app, crate::model::SortMode::Type),
+            sortable_header("Cluster", app, crate::model::SortMode::Cluster),
+            sortable_header("Memory", app, crate::model::SortMode::Mem),
+            sortable_header("Ops/s", app, crate::model::SortMode::Ops),
+            sortable_header("Lat", app, crate::model::SortMode::Lat),
+            sortable_header("LatMax", app, crate::model::SortMode::LatMax),
+            sortable_header("Status", app, crate::model::SortMode::Status),
         ])
     };
 
@@ -526,9 +555,9 @@ fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "Start filter input in overview (clears existing filter)",
         ),
         ("F5", "Toggle flat/tree view in overview"),
-        ("F6", "Cycle sort mode in overview"),
+        ("F6", "Choose sort column in overview"),
         ("t", "Toggle flat/tree view in overview"),
-        ("s", "Cycle sort mode in overview"),
+        ("s", "Cycle sort column in overview"),
         (
             "h",
             "Toggle host rendering (auto hide when all hosts are the same)",
@@ -549,13 +578,64 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, area: Rect) {
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 toggle sort\nh toggle host rendering\n/ filter in overview";
+    let text = "q quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title("Help"))
             .wrap(Wrap { trim: false }),
         popup,
     );
+}
+
+fn sort_direction_symbol(direction: crate::model::SortDirection) -> &'static str {
+    match direction {
+        crate::model::SortDirection::Asc => "↑",
+        crate::model::SortDirection::Desc => "↓",
+    }
+}
+
+fn sortable_header(label: &str, app: &AppState, column: crate::model::SortMode) -> String {
+    if app.sort_mode == column {
+        format!("{label} {}", sort_direction_symbol(app.sort_direction))
+    } else {
+        label.to_string()
+    }
+}
+
+fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
+    let width = area.width.saturating_mul(45) / 100;
+    let height = area.height.saturating_mul(55) / 100;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    let columns = app.sortable_columns();
+    let rows: Vec<Row<'_>> = columns
+        .iter()
+        .map(|column| {
+            let direction = if *column == app.sort_mode {
+                format!(" ({})", sort_direction_symbol(app.sort_direction))
+            } else {
+                String::new()
+            };
+            Row::new(vec![Cell::from(format!("{}{}", column.label(), direction))])
+        })
+        .collect();
+    let table = Table::new(rows, [Constraint::Percentage(100)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Sort By (Enter select, Esc cancel)"),
+        )
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("> ");
+    let mut state =
+        ratatui::widgets::TableState::default().with_selected(Some(app.sort_picker_index));
+
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(table, popup, &mut state);
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {

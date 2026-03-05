@@ -82,10 +82,15 @@ enum CliViewMode {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSortMode {
+    Alias,
     Address,
+    Type,
+    Cluster,
+    Memory,
     Mem,
     Ops,
     Lat,
+    Latmax,
     Status,
 }
 
@@ -118,10 +123,15 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
     }
     if let Some(sort) = args.sort {
         settings.default_sort = match sort {
+            CliSortMode::Alias => SortMode::Alias,
             CliSortMode::Address => SortMode::Address,
+            CliSortMode::Type => SortMode::Type,
+            CliSortMode::Cluster => SortMode::Cluster,
+            CliSortMode::Memory => SortMode::Mem,
             CliSortMode::Mem => SortMode::Mem,
             CliSortMode::Ops => SortMode::Ops,
             CliSortMode::Lat => SortMode::Lat,
+            CliSortMode::Latmax => SortMode::LatMax,
             CliSortMode::Status => SortMode::Status,
         };
     }

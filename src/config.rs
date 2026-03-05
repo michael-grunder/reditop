@@ -195,10 +195,14 @@ fn parse_view(raw: Option<&str>) -> Result<Option<ViewMode>> {
 fn parse_sort(raw: Option<&str>) -> Result<Option<SortMode>> {
     Ok(match raw {
         None => None,
+        Some("alias") => Some(SortMode::Alias),
         Some("address") => Some(SortMode::Address),
-        Some("mem") => Some(SortMode::Mem),
+        Some("type") => Some(SortMode::Type),
+        Some("cluster") => Some(SortMode::Cluster),
+        Some("memory") | Some("mem") => Some(SortMode::Mem),
         Some("ops") => Some(SortMode::Ops),
         Some("latency") | Some("lat") => Some(SortMode::Lat),
+        Some("latmax") => Some(SortMode::LatMax),
         Some("status") => Some(SortMode::Status),
         Some(other) => bail!("invalid sort_default: {other}"),
     })

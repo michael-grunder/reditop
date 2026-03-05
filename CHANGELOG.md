@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overview memory display now uses one `Memory` column that shows `used/maxmemory` when maxmemory is configured, otherwise just `used`.
 - Overview now shows live user input in the bottom status bar while search/filter editing is active.
 - Added function-key aliases for existing overview actions (`F1` help, `F5` view toggle, `F6` sort cycle) and wired `F3`/`F4` into search/filter input entry.
+- Reworked overview sorting: `F6` now opens a selector built from currently displayed columns, sorting supports explicit direction, and the active header shows an `↑`/`↓` indicator.
 ### Deprecated
 ### Removed
 ### Fixed

@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
+use crate::model::{
+    InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, ViewMode,
+};
 use crate::target_addr::{canonical_host, strip_host};
 use crate::topology::{TreeGroup, build_tree_groups};
 
@@ -46,6 +48,9 @@ pub struct AppState {
     pub settings: RuntimeSettings,
     pub view_mode: ViewMode,
     pub sort_mode: SortMode,
+    pub sort_direction: SortDirection,
+    pub is_sorting: bool,
+    pub sort_picker_index: usize,
     pub filter: String,
     pub is_filtering: bool,
     pub filter_prompt_mode: FilterPromptMode,
@@ -70,6 +75,9 @@ impl AppState {
         Self {
             view_mode: settings.default_view,
             sort_mode: settings.default_sort,
+            sort_direction: default_sort_direction(settings.default_sort),
+            is_sorting: false,
+            sort_picker_index: 0,
             settings,
             filter: String::new(),
             is_filtering: false,
@@ -145,7 +153,7 @@ impl AppState {
 
         match self.view_mode {
             ViewMode::Flat => {
-                sort_instances(&mut nodes, self.sort_mode);
+                sort_instances(&mut nodes, self.sort_mode, self.sort_direction);
                 nodes
                     .into_iter()
                     .map(|node| self.to_display_row(node, "", should_omit_host, &cluster_labels))
@@ -161,6 +169,75 @@ impl AppState {
 
     pub fn toggle_host_rendering(&mut self) {
         self.force_show_host = !self.force_show_host;
+    }
+
+    pub fn sortable_columns(&self) -> Vec<SortMode> {
+        let mut columns = vec![SortMode::Alias];
+        if self.show_address_column() {
+            columns.push(SortMode::Address);
+        }
+        columns.extend([
+            SortMode::Type,
+            SortMode::Cluster,
+            SortMode::Mem,
+            SortMode::Ops,
+            SortMode::Lat,
+            SortMode::LatMax,
+            SortMode::Status,
+        ]);
+        columns
+    }
+
+    pub fn open_sort_picker(&mut self) {
+        let columns = self.sortable_columns();
+        self.sort_picker_index = columns
+            .iter()
+            .position(|mode| *mode == self.sort_mode)
+            .unwrap_or(0);
+        self.is_sorting = true;
+    }
+
+    pub fn close_sort_picker(&mut self) {
+        self.is_sorting = false;
+    }
+
+    pub fn move_sort_picker_selection(&mut self, delta: isize) {
+        let columns = self.sortable_columns();
+        if columns.is_empty() {
+            self.sort_picker_index = 0;
+            return;
+        }
+        let current = self.sort_picker_index as isize;
+        let next = (current + delta).clamp(0, (columns.len() - 1) as isize) as usize;
+        self.sort_picker_index = next;
+    }
+
+    pub fn apply_sort_picker_selection(&mut self) {
+        let columns = self.sortable_columns();
+        let Some(chosen_mode) = columns.get(self.sort_picker_index).copied() else {
+            self.is_sorting = false;
+            return;
+        };
+        if self.sort_mode == chosen_mode {
+            self.sort_direction = self.sort_direction.toggle();
+        } else {
+            self.sort_mode = chosen_mode;
+            self.sort_direction = default_sort_direction(chosen_mode);
+        }
+        self.is_sorting = false;
+        self.clamp_selection();
+    }
+
+    pub fn cycle_sort_mode(&mut self) {
+        let columns = self.sortable_columns();
+        let current_idx = columns
+            .iter()
+            .position(|mode| *mode == self.sort_mode)
+            .unwrap_or(0);
+        let next_idx = (current_idx + 1) % columns.len();
+        self.sort_mode = columns[next_idx];
+        self.sort_direction = default_sort_direction(self.sort_mode);
+        self.clamp_selection();
     }
 
     fn build_tree_rows(
@@ -182,7 +259,7 @@ impl AppState {
                 .filter_map(|key| filtered_map.get(key))
                 .copied()
                 .collect();
-            sort_tree_roots(&mut roots, self.sort_mode);
+            sort_tree_roots(&mut roots, self.sort_mode, self.sort_direction);
             let mut rendered = HashSet::new();
             let ctx = TreeRenderCtx {
                 filtered_map: &filtered_map,
@@ -227,7 +304,7 @@ impl AppState {
                     .collect::<Vec<&InstanceState>>()
             })
             .unwrap_or_default();
-        sort_instances(&mut children, self.sort_mode);
+        sort_instances(&mut children, self.sort_mode, self.sort_direction);
 
         for (idx, child) in children.iter().enumerate() {
             if rendered.contains(&child.key) {
@@ -355,43 +432,72 @@ impl AppState {
     }
 }
 
-fn sort_instances(instances: &mut Vec<&InstanceState>, mode: SortMode) {
-    instances.sort_by(|a, b| compare_instances(a, b, mode));
+fn sort_instances(instances: &mut Vec<&InstanceState>, mode: SortMode, direction: SortDirection) {
+    instances.sort_by(|a, b| compare_instances(a, b, mode, direction));
 }
 
-fn compare_instances(a: &InstanceState, b: &InstanceState, mode: SortMode) -> Ordering {
-    match mode {
+fn compare_instances(
+    a: &InstanceState,
+    b: &InstanceState,
+    mode: SortMode,
+    direction: SortDirection,
+) -> Ordering {
+    let ordering = match mode {
+        SortMode::Alias => instance_sort_label(a).cmp(&instance_sort_label(b)),
         SortMode::Address => a.addr.cmp(&b.addr),
-        SortMode::Mem => b
+        SortMode::Type => compact_instance_type(a.kind).cmp(compact_instance_type(b.kind)),
+        SortMode::Cluster => a.cluster_id.cmp(&b.cluster_id),
+        SortMode::Mem => a
             .used_memory_bytes
             .unwrap_or(0)
-            .cmp(&a.used_memory_bytes.unwrap_or(0))
-            .then_with(|| a.addr.cmp(&b.addr)),
-        SortMode::Ops => b
-            .ops_per_sec
-            .unwrap_or(0)
-            .cmp(&a.ops_per_sec.unwrap_or(0))
-            .then_with(|| a.addr.cmp(&b.addr)),
-        SortMode::Lat => b
+            .cmp(&b.used_memory_bytes.unwrap_or(0)),
+        SortMode::Ops => a.ops_per_sec.unwrap_or(0).cmp(&b.ops_per_sec.unwrap_or(0)),
+        SortMode::Lat => a
             .last_latency_ms
             .unwrap_or(0.0)
-            .partial_cmp(&a.last_latency_ms.unwrap_or(0.0))
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| a.addr.cmp(&b.addr)),
-        SortMode::Status => a
-            .status
-            .severity()
-            .cmp(&b.status.severity())
-            .then_with(|| a.addr.cmp(&b.addr)),
-    }
+            .partial_cmp(&b.last_latency_ms.unwrap_or(0.0))
+            .unwrap_or(Ordering::Equal),
+        SortMode::LatMax => a
+            .max_latency_ms
+            .partial_cmp(&b.max_latency_ms)
+            .unwrap_or(Ordering::Equal),
+        SortMode::Status => a.status.severity().cmp(&b.status.severity()),
+    };
+    apply_direction(ordering, direction).then_with(|| a.addr.cmp(&b.addr))
 }
 
-fn sort_tree_roots(instances: &mut Vec<&InstanceState>, mode: SortMode) {
+fn sort_tree_roots(instances: &mut Vec<&InstanceState>, mode: SortMode, direction: SortDirection) {
     instances.sort_by(|a, b| {
         root_kind_rank(a.kind)
             .cmp(&root_kind_rank(b.kind))
-            .then_with(|| compare_instances(a, b, mode))
+            .then_with(|| compare_instances(a, b, mode, direction))
     });
+}
+
+fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
+    match direction {
+        SortDirection::Asc => ordering,
+        SortDirection::Desc => ordering.reverse(),
+    }
+}
+
+fn default_sort_direction(mode: SortMode) -> SortDirection {
+    match mode {
+        SortMode::Alias
+        | SortMode::Address
+        | SortMode::Type
+        | SortMode::Cluster
+        | SortMode::Status => SortDirection::Asc,
+        SortMode::Mem | SortMode::Ops | SortMode::Lat | SortMode::LatMax => SortDirection::Desc,
+    }
+}
+
+fn instance_sort_label(instance: &InstanceState) -> String {
+    instance
+        .alias
+        .clone()
+        .unwrap_or_else(|| instance.addr.clone())
+        .to_ascii_lowercase()
 }
 
 fn root_kind_rank(kind: InstanceType) -> u8 {
@@ -452,7 +558,9 @@ fn compact_instance_type(kind: InstanceType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{AppState, FilterPromptMode, format_memory_usage};
-    use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortMode, ViewMode};
+    use crate::model::{
+        InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, ViewMode,
+    };
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -579,5 +687,29 @@ mod tests {
         assert!(app.is_filtering);
         assert_eq!(app.filter_prompt_mode, FilterPromptMode::Filter);
         assert!(app.filter.is_empty());
+    }
+
+    #[test]
+    fn sort_picker_uses_only_visible_columns() {
+        let mut app = AppState::new(settings());
+        app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
+        app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
+
+        let columns = app.sortable_columns();
+        assert!(columns.contains(&SortMode::Alias));
+        assert!(!columns.contains(&SortMode::Address));
+    }
+
+    #[test]
+    fn applying_same_sort_column_toggles_direction() {
+        let mut app = AppState::new(settings());
+        app.sort_mode = SortMode::Status;
+        app.sort_direction = SortDirection::Asc;
+        app.open_sort_picker();
+
+        app.apply_sort_picker_selection();
+
+        assert_eq!(app.sort_mode, SortMode::Status);
+        assert_eq!(app.sort_direction, SortDirection::Desc);
     }
 }

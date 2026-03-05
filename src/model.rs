@@ -18,21 +18,44 @@ impl ViewMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
+    Alias,
     Address,
+    Type,
+    Cluster,
     Mem,
     Ops,
     Lat,
+    LatMax,
     Status,
 }
 
 impl SortMode {
-    pub fn next(self) -> Self {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Address => Self::Mem,
-            Self::Mem => Self::Ops,
-            Self::Ops => Self::Lat,
-            Self::Lat => Self::Status,
-            Self::Status => Self::Address,
+            Self::Alias => "Alias",
+            Self::Address => "Address",
+            Self::Type => "Type",
+            Self::Cluster => "Cluster",
+            Self::Mem => "Memory",
+            Self::Ops => "Ops/s",
+            Self::Lat => "Lat",
+            Self::LatMax => "LatMax",
+            Self::Status => "Status",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+impl SortDirection {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Asc => Self::Desc,
+            Self::Desc => Self::Asc,
         }
     }
 }

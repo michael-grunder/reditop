@@ -27,7 +27,7 @@
 - `F3`: start search input (overview)
 - `F4`: start filter input and clear existing filter (overview)
 - `F5`: toggle tree/flat (overview)
-- `F6`: cycle sort mode (overview)
+- `F6`: open sort picker from currently visible overview columns
 - `H`: open full help page
 - `?`: toggle help
 - `Up/Down`: move selection
@@ -35,7 +35,7 @@
 - `Esc`: back to previous view (or stop filter editing)
 - `Tab` / `Left` / `Right`: cycle detail tabs
 - `t`: toggle tree/flat
-- `s`: cycle sort mode
+- `s`: cycle sort column
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
 - `/`: start filter input
 - `r`: refresh now
@@ -63,7 +63,7 @@ Important options:
 - `--command-timeout <DURATION>`
 - `-n, --concurrency <N>`
 - `--view <flat|tree>`
-- `--sort <address|mem|ops|lat|status>`
+- `--sort <alias|address|type|cluster|memory|mem|ops|lat|latmax|status>`
 - `--no-config`
 - `-a, --auth <PASSWORD>`
 - `--user <USERNAME>`
