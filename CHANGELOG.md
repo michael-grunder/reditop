@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+### Fixed
+- Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
+- TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
+
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.
 - Added Cargo musl build target alias: `cargo build-musl` builds a release `x86_64-unknown-linux-musl` binary for portable static deployment.

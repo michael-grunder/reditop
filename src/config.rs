@@ -36,6 +36,7 @@ struct ConfigTarget {
     enabled: Option<bool>,
 }
 
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Deserialize, Default)]
 struct ThemeConfig {
     background_color: Option<String>,
@@ -73,13 +74,16 @@ pub fn load_config(
     path: Option<&Path>,
     no_default_config: bool,
 ) -> Result<(RuntimeOverrides, Vec<Target>)> {
-    let maybe_path = if let Some(explicit) = path {
-        Some(explicit.to_path_buf())
-    } else if no_default_config {
-        None
-    } else {
-        find_default_config_path()
-    };
+    let maybe_path = path.map_or_else(
+        || {
+            if no_default_config {
+                None
+            } else {
+                find_default_config_path()
+            }
+        },
+        |explicit| Some(explicit.to_path_buf()),
+    );
 
     let Some(path) = maybe_path else {
         return Ok((RuntimeOverrides::default(), Vec::new()));

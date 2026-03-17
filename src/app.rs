@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::column::{RenderCtx, SortCtx};
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortDirection, ViewMode};
@@ -36,6 +36,7 @@ pub struct DisplayRow {
     pub stale: bool,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct AppState {
     pub settings: RuntimeSettings,
     pub view_mode: ViewMode,
@@ -105,8 +106,10 @@ impl AppState {
             return;
         }
 
-        let current = self.selected_index as isize;
-        let next = (current + delta).clamp(0, (len - 1) as isize) as usize;
+        let current = isize::try_from(self.selected_index).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(len - 1).unwrap_or(isize::MAX);
+        let next = (current + delta).clamp(0, max_index);
+        let next = usize::try_from(next).unwrap_or(0);
         self.selected_index = next;
     }
 
@@ -207,8 +210,10 @@ impl AppState {
             self.sort_picker_index = 0;
             return;
         }
-        let current = self.sort_picker_index as isize;
-        let next = (current + delta).clamp(0, (columns.len() - 1) as isize) as usize;
+        let current = isize::try_from(self.sort_picker_index).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(columns.len() - 1).unwrap_or(isize::MAX);
+        let next = (current + delta).clamp(0, max_index);
+        let next = usize::try_from(next).unwrap_or(0);
         self.sort_picker_index = next;
     }
 
@@ -238,7 +243,7 @@ impl AppState {
             .position(|key| *key == self.sort_by)
             .unwrap_or(0);
         let next_idx = (current_idx + 1) % columns.len();
-        self.sort_by = columns[next_idx].clone();
+        self.sort_by.clone_from(&columns[next_idx]);
         self.sort_direction = default_sort_direction_for_column(&self.sort_by);
         self.clamp_selection();
     }
@@ -394,19 +399,19 @@ impl AppState {
     }
 
     fn cluster_labels(&self) -> HashMap<String, String> {
-        let mut ordered = BTreeMap::<String, ()>::new();
+        let mut ordered = BTreeSet::<String>::new();
         for instance in self.instances.values() {
             let raw_cluster = instance
                 .cluster_id
                 .clone()
                 .unwrap_or_else(|| "Standalone".to_string());
-            ordered.insert(raw_cluster, ());
+            ordered.insert(raw_cluster);
         }
 
         ordered
-            .keys()
+            .into_iter()
             .enumerate()
-            .map(|(idx, raw_cluster)| (raw_cluster.clone(), (idx + 1).to_string()))
+            .map(|(idx, raw_cluster)| (raw_cluster, (idx + 1).to_string()))
             .collect()
     }
 
@@ -456,29 +461,30 @@ fn compare_instances(
     omit_host: bool,
     registry: &ColumnRegistry,
 ) -> Ordering {
-    let ordering = if let Some(column) = registry.column(sort_by) {
-        let a_cluster = a
-            .cluster_id
-            .clone()
-            .unwrap_or_else(|| "Standalone".to_string());
-        let b_cluster = b
-            .cluster_id
-            .clone()
-            .unwrap_or_else(|| "Standalone".to_string());
-        let a_ctx = SortCtx {
-            snap: a,
-            omit_host,
-            cluster_label: cluster_labels.get(&a_cluster).map(String::as_str),
-        };
-        let b_ctx = SortCtx {
-            snap: b,
-            omit_host,
-            cluster_label: cluster_labels.get(&b_cluster).map(String::as_str),
-        };
-        column.sort_key(&a_ctx).compare(&column.sort_key(&b_ctx))
-    } else {
-        a.addr.cmp(&b.addr)
-    };
+    let ordering = registry.column(sort_by).map_or_else(
+        || a.addr.cmp(&b.addr),
+        |column| {
+            let a_cluster = a
+                .cluster_id
+                .clone()
+                .unwrap_or_else(|| "Standalone".to_string());
+            let b_cluster = b
+                .cluster_id
+                .clone()
+                .unwrap_or_else(|| "Standalone".to_string());
+            let a_ctx = SortCtx {
+                snap: a,
+                omit_host,
+                cluster_label: cluster_labels.get(&a_cluster).map(String::as_str),
+            };
+            let b_ctx = SortCtx {
+                snap: b,
+                omit_host,
+                cluster_label: cluster_labels.get(&b_cluster).map(String::as_str),
+            };
+            column.sort_key(&a_ctx).compare(&column.sort_key(&b_ctx))
+        },
+    );
 
     apply_direction(ordering, direction).then_with(|| a.addr.cmp(&b.addr))
 }

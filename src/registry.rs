@@ -64,7 +64,7 @@ impl ColumnRegistry {
             .visible_overview
             .retain(|key| registry.columns.contains_key(key));
         if registry.visible_overview.is_empty() {
-            registry.visible_overview = registry.column_order.clone();
+            registry.visible_overview.clone_from(&registry.column_order);
         }
 
         if !registry.columns.contains_key(&registry.default_sort_by) {
@@ -238,7 +238,7 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
                 .as_deref()
                 .map(parse_align)
                 .transpose()?
-                .unwrap_or(default_align_for_calc(&calc_kind));
+                .unwrap_or_else(|| default_align_for_calc(&calc_kind));
 
             Ok(Box::new(CalcColumn {
                 header,

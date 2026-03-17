@@ -100,6 +100,7 @@ enum CliSortMode {
     Status,
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn build_launch_config() -> Result<LaunchConfig> {
     let args = Cli::parse();
 
@@ -133,8 +134,7 @@ pub async fn build_launch_config() -> Result<LaunchConfig> {
             CliSortMode::Address => SortMode::Address,
             CliSortMode::Type => SortMode::Type,
             CliSortMode::Cluster => SortMode::Cluster,
-            CliSortMode::Memory => SortMode::Mem,
-            CliSortMode::Mem => SortMode::Mem,
+            CliSortMode::Memory | CliSortMode::Mem => SortMode::Mem,
             CliSortMode::Ops => SortMode::Ops,
             CliSortMode::Lat => SortMode::Lat,
             CliSortMode::Latmax => SortMode::LatMax,
@@ -187,30 +187,30 @@ pub async fn build_launch_config() -> Result<LaunchConfig> {
 
     for item in &mut merged_targets {
         if item.username.is_none() {
-            item.username = args.user.clone();
+            item.username.clone_from(&args.user);
         }
         if item.password.is_none() {
-            item.password = args.auth.clone();
+            item.password.clone_from(&args.auth);
         }
     }
 
     for maybe in cli_targets {
         let mut parsed = maybe?;
         if parsed.username.is_none() {
-            parsed.username = args.user.clone();
+            parsed.username.clone_from(&args.user);
         }
         if parsed.password.is_none() {
-            parsed.password = args.auth.clone();
+            parsed.password.clone_from(&args.auth);
         }
         merged_targets.push(parsed);
     }
 
     for seed in &mut parsed_cluster_seeds {
         if seed.username.is_none() {
-            seed.username = args.user.clone();
+            seed.username.clone_from(&args.user);
         }
         if seed.password.is_none() {
-            seed.password = args.auth.clone();
+            seed.password.clone_from(&args.auth);
         }
     }
 

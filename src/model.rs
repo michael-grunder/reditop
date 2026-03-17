@@ -248,7 +248,7 @@ impl InstanceState {
 
     pub fn is_stale(&self, refresh_interval: Duration) -> bool {
         self.last_updated
-            .map_or(true, |ts| ts.elapsed() > refresh_interval.saturating_mul(2))
+            .is_none_or(|ts| ts.elapsed() > refresh_interval.saturating_mul(2))
     }
 
     pub fn push_latency_sample(&mut self, sample_ms: f64) {
@@ -261,6 +261,6 @@ impl InstanceState {
             self.max_latency_ms = sample_ms;
         }
         let total: f64 = self.latency_window.iter().sum();
-        self.avg_latency_ms = total / self.latency_window.len() as f64;
+        self.avg_latency_ms = total / crate::column::usize_to_f64(self.latency_window.len());
     }
 }

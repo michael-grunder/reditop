@@ -136,7 +136,7 @@ pub fn parse_string(snap: &InstanceState, key: &str) -> Option<String> {
 
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
+    let mut value = u64_to_f64(bytes);
     let mut idx = 0;
     while value >= 1024.0 && idx + 1 < UNITS.len() {
         value /= 1024.0;
@@ -159,6 +159,26 @@ pub fn format_millis(value: f64, decimals: u8) -> String {
     format!("{:.*}", decimals as usize, value)
 }
 
+#[allow(clippy::cast_precision_loss)]
+pub const fn u64_to_f64(value: u64) -> f64 {
+    value as f64
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub const fn i64_to_f64(value: i64) -> f64 {
+    value as f64
+}
+
+#[allow(clippy::cast_precision_loss)]
+pub const fn usize_to_f64(value: usize) -> f64 {
+    value as f64
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub const fn nonnegative_f64_to_u64(value: f64) -> u64 {
+    value.max(0.0) as u64
+}
+
 pub const fn compact_role(snap: &InstanceState) -> &'static str {
     match snap.kind {
         crate::model::InstanceType::Standalone => "STD",
@@ -175,6 +195,6 @@ pub fn default_label(addr: &str, omit_host: bool) -> String {
     addr.rsplit('/').next().unwrap_or(addr).to_string()
 }
 
-pub fn status_text(status: Status) -> &'static str {
+pub const fn status_text(status: Status) -> &'static str {
     status.as_str()
 }

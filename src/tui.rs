@@ -2,7 +2,7 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -19,7 +19,7 @@ use crate::column::Align;
 use crate::poller;
 use crate::registry::ColumnRegistry;
 
-pub async fn run(launch: LaunchConfig) -> Result<()> {
+pub fn run(launch: LaunchConfig) -> Result<()> {
     if launch.verbose {
         eprintln!(
             "redis-top: targets={} refresh={} connect_timeout={} command_timeout={}",
@@ -30,15 +30,13 @@ pub async fn run(launch: LaunchConfig) -> Result<()> {
         );
     }
     let mut terminal = setup_terminal()?;
-    let result = run_loop(&mut terminal, launch).await;
+    let result = run_loop(&mut terminal, launch);
     restore_terminal(&mut terminal)?;
     result
 }
 
-async fn run_loop(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    launch: LaunchConfig,
-) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchConfig) -> Result<()> {
     let registry = ColumnRegistry::load(
         launch.config_path.as_deref(),
         launch.no_default_config,
@@ -63,6 +61,10 @@ async fn run_loop(
                 continue;
             };
             if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            if is_quit_key(key) {
+                app.should_quit = true;
                 continue;
             }
 
@@ -103,15 +105,9 @@ async fn run_loop(
             }
 
             match key.code {
-                KeyCode::Char('q') => app.should_quit = true,
-                KeyCode::F(1) => app.open_help_view(),
-                KeyCode::Char('H') => app.open_help_view(),
+                KeyCode::F(1) | KeyCode::Char('H') => app.open_help_view(),
                 KeyCode::Char('?') => app.show_help = !app.show_help,
-                KeyCode::F(5) if app.active_view == ActiveView::Overview => {
-                    app.view_mode = app.view_mode.toggle();
-                    app.clamp_selection();
-                }
-                KeyCode::Char('t') if app.active_view == ActiveView::Overview => {
+                KeyCode::F(5) | KeyCode::Char('t') if app.active_view == ActiveView::Overview => {
                     app.view_mode = app.view_mode.toggle();
                     app.clamp_selection();
                 }
@@ -160,6 +156,18 @@ async fn run_loop(
     }
 
     Ok(())
+}
+
+const fn is_quit_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('q'))
+        || matches!(
+            key,
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL)
+        )
 }
 
 fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
@@ -299,7 +307,8 @@ fn compute_column_widths(
         return Vec::new();
     }
 
-    let spacing_total = column_spacing.saturating_mul(columns.len().saturating_sub(1) as u16);
+    let gaps = u16::try_from(columns.len().saturating_sub(1)).unwrap_or(u16::MAX);
+    let spacing_total = column_spacing.saturating_mul(gaps);
     let content_width = table_width.saturating_sub(spacing_total);
     let mut widths = vec![0u16; columns.len()];
     let mut remaining = content_width;
@@ -399,6 +408,7 @@ fn fit_cell_text(text: &str, width: usize, align: Align) -> String {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let Some(selected_key) = app.selected_key() else {
         frame.render_widget(
@@ -479,7 +489,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             let hit_rate = if hits + misses == 0 {
                 0.0
             } else {
-                hits as f64 / (hits + misses) as f64 * 100.0
+                crate::column::u64_to_f64(hits) / crate::column::u64_to_f64(hits + misses) * 100.0
             };
             let replication_source = match (
                 instance.detail.master_host.as_deref(),
@@ -618,19 +628,7 @@ fn format_with_commas(value: u64) -> String {
 }
 
 fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut idx = 0;
-    while value >= 1024.0 && idx + 1 < UNITS.len() {
-        value /= 1024.0;
-        idx += 1;
-    }
-
-    if idx == 0 {
-        format!("{bytes} {}", UNITS[idx])
-    } else {
-        format!("{value:.1} {}", UNITS[idx])
-    }
+    crate::column::format_bytes(bytes)
 }
 
 fn draw_help_page(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
@@ -678,7 +676,7 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
 const fn help_bindings() -> &'static [(&'static str, &'static str)] {
     &[
-        ("q", "Quit"),
+        ("q / Ctrl+C", "Quit"),
         ("F1", "Open full help page"),
         ("H", "Open this help page"),
         ("Esc", "Back from detail/help or stop filter editing"),
@@ -717,7 +715,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -800,15 +798,15 @@ fn base_style(app: &AppState) -> Style {
         .bg(background_color(app))
 }
 
-fn background_color(app: &AppState) -> Color {
+const fn background_color(app: &AppState) -> Color {
     app.settings.ui_theme.background.to_ratatui_color()
 }
 
-fn foreground_color(app: &AppState) -> Color {
+const fn foreground_color(app: &AppState) -> Color {
     app.settings.ui_theme.foreground.to_ratatui_color()
 }
 
-fn carat_color(app: &AppState) -> Color {
+const fn carat_color(app: &AppState) -> Color {
     app.settings.ui_theme.carat.to_ratatui_color()
 }
 
@@ -831,9 +829,11 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 mod tests {
     use std::sync::Arc;
 
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     use super::{
         Align, compute_column_widths, fit_cell_text, format_aligned_rows, format_with_commas,
-        help_bindings,
+        help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
 
@@ -866,6 +866,26 @@ mod tests {
     }
 
     #[test]
+    fn quit_key_matches_q_and_ctrl_c() {
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE
+        )));
+        assert!(is_quit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+    }
+
+    #[test]
+    fn quit_key_does_not_match_plain_c() {
+        assert!(!is_quit_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
     fn fit_cell_text_right_aligns_headers_and_values_consistently() {
         assert_eq!(fit_cell_text("Ops/s", 8, Align::Right), "   Ops/s");
         assert_eq!(fit_cell_text("123", 8, Align::Right), "     123");
@@ -876,7 +896,7 @@ mod tests {
     }
 
     impl Column for TestColumn {
-        fn header(&self) -> &str {
+        fn header(&self) -> &'static str {
             ""
         }
 

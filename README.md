@@ -17,7 +17,7 @@
 
 ## Key Bindings
 
-- `q`: quit
+- `q` / `Ctrl+C`: quit
 - `F1`: open full help page
 - `F3`: start search input (overview)
 - `F4`: start filter input and clear existing filter (overview)

@@ -1,7 +1,7 @@
 use crate::column::{
     Align, CellText, Column, FormatSpec, RenderCtx, SortCtx, SortKey, ValueType, WidthHint,
-    format_bytes, format_millis, format_percent, parse_bool, parse_f64, parse_i64, parse_string,
-    parse_u64,
+    format_bytes, format_millis, format_percent, i64_to_f64, nonnegative_f64_to_u64, parse_bool,
+    parse_f64, parse_i64, parse_string, parse_u64, u64_to_f64,
 };
 
 pub struct RedisInfoFieldColumn {
@@ -17,12 +17,7 @@ pub struct RedisInfoFieldColumn {
 impl RedisInfoFieldColumn {
     fn format_value(&self, snap: &crate::model::InstanceState) -> Option<String> {
         match self.value_type {
-            ValueType::String => {
-                parse_string(snap, &self.info_key).map(|value| match self.format {
-                    FormatSpec::Raw => value,
-                    _ => value,
-                })
-            }
+            ValueType::String => parse_string(snap, &self.info_key),
             ValueType::U64 => parse_u64(snap, &self.info_key).map(|value| self.apply_u64(value)),
             ValueType::I64 => parse_i64(snap, &self.info_key).map(|value| self.apply_i64(value)),
             ValueType::F64 | ValueType::Percent => {
@@ -43,26 +38,26 @@ impl RedisInfoFieldColumn {
         match self.format {
             FormatSpec::Raw => value.to_string(),
             FormatSpec::BytesHuman => format_bytes(value),
-            FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, value as f64),
-            FormatSpec::Percent(decimals) => format_percent(value as f64, decimals),
-            FormatSpec::Millis(decimals) => format_millis(value as f64, decimals),
+            FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, u64_to_f64(value)),
+            FormatSpec::Percent(decimals) => format_percent(u64_to_f64(value), decimals),
+            FormatSpec::Millis(decimals) => format_millis(u64_to_f64(value), decimals),
         }
     }
 
     fn apply_i64(&self, value: i64) -> String {
         match self.format {
             FormatSpec::Raw => value.to_string(),
-            FormatSpec::BytesHuman => format_bytes(value.max(0) as u64),
-            FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, value as f64),
-            FormatSpec::Percent(decimals) => format_percent(value as f64, decimals),
-            FormatSpec::Millis(decimals) => format_millis(value as f64, decimals),
+            FormatSpec::BytesHuman => format_bytes(value.max(0).cast_unsigned()),
+            FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, i64_to_f64(value)),
+            FormatSpec::Percent(decimals) => format_percent(i64_to_f64(value), decimals),
+            FormatSpec::Millis(decimals) => format_millis(i64_to_f64(value), decimals),
         }
     }
 
     fn apply_f64(&self, value: f64) -> String {
         match self.format {
             FormatSpec::Raw => value.to_string(),
-            FormatSpec::BytesHuman => format_bytes(value.max(0.0) as u64),
+            FormatSpec::BytesHuman => format_bytes(nonnegative_f64_to_u64(value)),
             FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, value),
             FormatSpec::Percent(decimals) => format_percent(value, decimals),
             FormatSpec::Millis(decimals) => format_millis(value, decimals),

@@ -1,6 +1,7 @@
 use crate::column::{
     Align, CellText, Column, FormatSpec, RenderCtx, SortCtx, SortKey, WidthHint, compact_role,
-    default_label, format_millis, format_percent, parse_u64, status_text,
+    default_label, format_millis, format_percent, nonnegative_f64_to_u64, parse_u64, status_text,
+    u64_to_f64,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +61,7 @@ impl CalcColumn {
                 if max == 0 {
                     return None;
                 }
-                let value = used as f64 / max as f64 * 100.0;
+                let value = u64_to_f64(used) / u64_to_f64(max) * 100.0;
                 Some(self.format_f64(value))
             }
             CalcKind::HitratePercent {
@@ -77,7 +78,7 @@ impl CalcColumn {
                 if total == 0 {
                     return None;
                 }
-                let value = hits as f64 / total as f64 * 100.0;
+                let value = u64_to_f64(hits) / u64_to_f64(total) * 100.0;
                 Some(self.format_f64(value))
             }
             CalcKind::ClientsTotal { key } => parse_u64(snap, key)
@@ -111,7 +112,9 @@ impl CalcColumn {
                 let used = parse_u64(snap, used_key).or(snap.used_memory_bytes);
                 let max = parse_u64(snap, max_key).or(snap.maxmemory_bytes);
                 match (used, max) {
-                    (Some(used), Some(max)) if max > 0 => SortKey::F64(used as f64 / max as f64),
+                    (Some(used), Some(max)) if max > 0 => {
+                        SortKey::F64(u64_to_f64(used) / u64_to_f64(max))
+                    }
                     _ => SortKey::Null,
                 }
             }
@@ -129,7 +132,7 @@ impl CalcColumn {
                 if total == 0 {
                     SortKey::Null
                 } else {
-                    SortKey::F64(hits as f64 / total as f64)
+                    SortKey::F64(u64_to_f64(hits) / u64_to_f64(total))
                 }
             }
             CalcKind::ClientsTotal { key } => parse_u64(snap, key)
@@ -147,7 +150,7 @@ impl CalcColumn {
             FormatSpec::Fixed(decimals) => format!("{:.*}", decimals as usize, value),
             FormatSpec::Percent(decimals) => format_percent(value, decimals),
             FormatSpec::Millis(decimals) => format_millis(value, decimals),
-            FormatSpec::BytesHuman => crate::column::format_bytes(value.max(0.0) as u64),
+            FormatSpec::BytesHuman => crate::column::format_bytes(nonnegative_f64_to_u64(value)),
         }
     }
 }

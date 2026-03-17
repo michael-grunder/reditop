@@ -19,5 +19,5 @@ use anyhow::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let launch = cli::build_launch_config().await?;
-    tui::run(launch).await
+    tui::run(launch)
 }

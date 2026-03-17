@@ -252,8 +252,7 @@ fn kv_pairs(value: &Value) -> Option<Vec<(&Value, &Value)>> {
 fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::BulkString(bytes) => Some(String::from_utf8_lossy(bytes).to_string()),
-        Value::SimpleString(text) => Some(text.clone()),
-        Value::VerbatimString { text, .. } => Some(text.clone()),
+        Value::SimpleString(text) | Value::VerbatimString { text, .. } => Some(text.clone()),
         Value::Int(num) => Some(num.to_string()),
         Value::Double(num) => Some(num.to_string()),
         Value::BigNumber(num) => Some(num.to_string()),
@@ -360,8 +359,18 @@ mod tests {
         let shards = parse_cluster_shards(&response);
         assert_eq!(shards.len(), 1);
         assert_eq!(shards[0].nodes.len(), 2);
-        assert!(shards[0].nodes.iter().any(|node| node.is_primary()));
-        assert!(shards[0].nodes.iter().any(|node| node.is_replica()));
+        assert!(
+            shards[0]
+                .nodes
+                .iter()
+                .any(super::ClusterShardNode::is_primary)
+        );
+        assert!(
+            shards[0]
+                .nodes
+                .iter()
+                .any(super::ClusterShardNode::is_replica)
+        );
     }
 
     #[test]
