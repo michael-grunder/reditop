@@ -233,6 +233,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let rows = app.visible_rows();
     let column_keys = app.visible_column_keys();
+    let emphasized = app.emphasized_rows_by_column(&rows);
     let columns: Vec<_> = column_keys
         .iter()
         .filter_map(|key| app.column_registry.column(key.as_str()))
@@ -253,7 +254,11 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                     let width = widths[idx];
                     let align = columns[idx].align();
                     let raw = app.render_cell(row, key).unwrap_or_default();
-                    Cell::from(fit_cell_text(&raw, width as usize, align))
+                    let mut cell = Cell::from(fit_cell_text(&raw, width as usize, align));
+                    if emphasized.get(key).is_some_and(|winner| winner == &row.key) {
+                        cell = cell.style(base_style(app).add_modifier(Modifier::BOLD));
+                    }
+                    cell
                 })
                 .collect::<Vec<Cell<'_>>>();
 

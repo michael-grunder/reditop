@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `--cluster <HOST:PORT>` CLI option to seed cluster auto-discovery and monitor all discovered primary/replica nodes.
 - Added a generic overview column system with pluggable column trait, sortable typed sort keys, width/alignment metadata, and per-column rendering helpers.
 - Added built-in configurable column registry (`default_columns.toml`) with `info` and `calc` column kinds plus config-driven visible column/sort selection.
+- Added optional per-column frame emphasis (`emphasis = "max"` / `"min"`) so visible winners such as highest latency can be rendered in bold without changing sort order.
 - Added INFO flat key map snapshots on each instance update to support generic INFO column extraction.
 - Added configurable TUI theme settings via `[theme]` (`background_color`, `foreground_color`, `carat_color`, `warning_color`, `critical_color`).
 ### Changed

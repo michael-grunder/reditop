@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::column::{RenderCtx, SortCtx};
+use crate::column::{Emphasis, RenderCtx, SortCtx, SortKey};
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortDirection, ViewMode};
 use crate::registry::ColumnRegistry;
 use crate::target_addr::canonical_host;
@@ -250,19 +250,51 @@ impl AppState {
 
     pub fn render_cell(&self, row: &DisplayRow, column_key: &str) -> Option<String> {
         let node = self.instances.get(&row.key)?;
-        let raw_cluster = node
-            .cluster_id
-            .clone()
-            .unwrap_or_else(|| "Standalone".to_string());
-        let cluster_label = self.cluster_labels().get(&raw_cluster).cloned();
         let column = self.column_registry.column(column_key)?;
-        let ctx = RenderCtx {
-            snap: node,
-            omit_host: self.should_omit_host_in_rendering(),
-            tree_prefix: &row.tree_prefix,
-            cluster_label: cluster_label.as_deref(),
-        };
+        let cluster_labels = self.cluster_labels();
+        let ctx = self.render_ctx(row, node, &cluster_labels);
         Some(column.render_cell(&ctx).text)
+    }
+
+    pub fn emphasized_rows_by_column(&self, rows: &[DisplayRow]) -> HashMap<String, String> {
+        let cluster_labels = self.cluster_labels();
+        let mut emphasized = HashMap::new();
+
+        for column_key in self.visible_column_keys() {
+            let Some(column) = self.column_registry.column(&column_key) else {
+                continue;
+            };
+            let Some(rule) = column.emphasis() else {
+                continue;
+            };
+
+            let winner = rows
+                .iter()
+                .filter_map(|row| {
+                    let node = self.instances.get(&row.key)?;
+                    let sort_ctx = self.sort_ctx(node, &cluster_labels);
+                    let sort_key = column.sort_key(&sort_ctx);
+                    if matches!(sort_key, SortKey::Null) {
+                        None
+                    } else {
+                        Some((row.key.as_str(), sort_key))
+                    }
+                })
+                .reduce(|best, candidate| {
+                    let ordering = candidate.1.compare(&best.1);
+                    let take_candidate = match rule {
+                        Emphasis::Max => ordering.is_gt(),
+                        Emphasis::Min => ordering.is_lt(),
+                    };
+                    if take_candidate { candidate } else { best }
+                });
+
+            if let Some((key, _)) = winner {
+                emphasized.insert(column_key, key.to_string());
+            }
+        }
+
+        emphasized
     }
 
     fn build_tree_rows(
@@ -428,6 +460,41 @@ impl AppState {
             return false;
         };
         hosts.all(|host| host.as_deref() == Some(first.as_str()))
+    }
+
+    fn render_ctx<'a>(
+        &'a self,
+        row: &'a DisplayRow,
+        node: &'a InstanceState,
+        cluster_labels: &'a HashMap<String, String>,
+    ) -> RenderCtx<'a> {
+        let raw_cluster = node
+            .cluster_id
+            .clone()
+            .unwrap_or_else(|| "Standalone".to_string());
+        let cluster_label = cluster_labels.get(&raw_cluster).map(String::as_str);
+        RenderCtx {
+            snap: node,
+            omit_host: self.should_omit_host_in_rendering(),
+            tree_prefix: &row.tree_prefix,
+            cluster_label,
+        }
+    }
+
+    fn sort_ctx<'a>(
+        &'a self,
+        node: &'a InstanceState,
+        cluster_labels: &'a HashMap<String, String>,
+    ) -> SortCtx<'a> {
+        let raw_cluster = node
+            .cluster_id
+            .clone()
+            .unwrap_or_else(|| "Standalone".to_string());
+        SortCtx {
+            snap: node,
+            omit_host: self.should_omit_host_in_rendering(),
+            cluster_label: cluster_labels.get(&raw_cluster).map(String::as_str),
+        }
     }
 }
 
@@ -709,5 +776,33 @@ mod tests {
 
         assert_eq!(app.sort_by, "status");
         assert_eq!(app.sort_direction, SortDirection::Desc);
+    }
+
+    #[test]
+    fn emphasizes_max_latency_rows_per_visible_column() {
+        let mut app = app();
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.last_latency_ms = Some(0.25);
+        a.max_latency_ms = 1.4;
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.last_latency_ms = Some(0.95);
+        b.max_latency_ms = 0.8;
+
+        let mut c = InstanceState::new("c".into(), "127.0.0.1:6381".into());
+        c.last_latency_ms = Some(0.40);
+        c.max_latency_ms = 2.1;
+
+        app.apply_update(a);
+        app.apply_update(b);
+        app.apply_update(c);
+
+        let rows = app.visible_rows();
+        let emphasized = app.emphasized_rows_by_column(&rows);
+
+        assert_eq!(emphasized.get("lat_last"), Some(&"b".to_string()));
+        assert_eq!(emphasized.get("lat_max"), Some(&"c".to_string()));
     }
 }

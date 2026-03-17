@@ -1,7 +1,7 @@
 use crate::column::{
-    Align, CellText, Column, FormatSpec, RenderCtx, SortCtx, SortKey, ValueType, WidthHint,
-    format_bytes, format_millis, format_percent, i64_to_f64, nonnegative_f64_to_u64, parse_bool,
-    parse_f64, parse_i64, parse_string, parse_u64, u64_to_f64,
+    Align, CellText, Column, Emphasis, FormatSpec, RenderCtx, SortCtx, SortKey, ValueType,
+    WidthHint, format_bytes, format_millis, format_percent, i64_to_f64, nonnegative_f64_to_u64,
+    parse_bool, parse_f64, parse_i64, parse_string, parse_u64, u64_to_f64,
 };
 
 pub struct RedisInfoFieldColumn {
@@ -10,6 +10,7 @@ pub struct RedisInfoFieldColumn {
     pub value_type: ValueType,
     pub format: FormatSpec,
     pub missing: String,
+    pub emphasis: Option<Emphasis>,
     pub align: Align,
     pub width_hint: WidthHint,
 }
@@ -102,5 +103,9 @@ impl Column for RedisInfoFieldColumn {
                 parse_bool(ctx.snap, &self.info_key).map_or(SortKey::Null, SortKey::Bool)
             }
         }
+    }
+
+    fn emphasis(&self) -> Option<Emphasis> {
+        self.emphasis
     }
 }

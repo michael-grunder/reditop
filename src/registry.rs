@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-use crate::column::{Align, Column, FormatSpec, ValueType, WidthHint};
+use crate::column::{Align, Column, Emphasis, FormatSpec, ValueType, WidthHint};
 use crate::columns::calc::{CalcColumn, CalcKind};
 use crate::columns::info::RedisInfoFieldColumn;
 use crate::model::{SortDirection, SortMode};
@@ -178,6 +178,7 @@ struct ColumnDef {
     type_name: String,
     header: Option<String>,
     align: Option<String>,
+    emphasis: Option<String>,
     min_width: Option<u16>,
     ideal_width: Option<u16>,
     max_width: Option<u16>,
@@ -200,6 +201,7 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
     };
     let header = def.header.clone().unwrap_or_else(|| key.to_string());
     let missing = def.missing.clone().unwrap_or_default();
+    let emphasis = def.emphasis.as_deref().map(parse_emphasis).transpose()?;
 
     match def.type_name.as_str() {
         "info" => {
@@ -222,6 +224,7 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
                 value_type,
                 format,
                 missing,
+                emphasis,
                 align,
                 width_hint,
             }))
@@ -245,6 +248,7 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
                 kind: calc_kind,
                 format,
                 missing,
+                emphasis,
                 align,
                 width_hint,
             }))
@@ -263,6 +267,14 @@ fn parse_value_type(raw: &str) -> Result<ValueType> {
         "percent" => Ok(ValueType::Percent),
         "bool" => Ok(ValueType::Bool),
         other => bail!("unsupported value_type: {other}"),
+    }
+}
+
+fn parse_emphasis(raw: &str) -> Result<Emphasis> {
+    match raw {
+        "max" => Ok(Emphasis::Max),
+        "min" => Ok(Emphasis::Min),
+        other => bail!("unsupported emphasis mode: {other}"),
     }
 }
 
@@ -387,6 +399,7 @@ pub const fn legacy_sort_direction(mode: SortMode) -> SortDirection {
 #[cfg(test)]
 mod tests {
     use super::ColumnRegistry;
+    use crate::column::Emphasis;
     use crate::model::SortMode;
 
     #[test]
@@ -395,5 +408,15 @@ mod tests {
         assert!(registry.column("alias").is_some());
         assert!(registry.column("used_mem").is_some());
         assert!(registry.visible_overview.iter().any(|k| k == "alias"));
+    }
+
+    #[test]
+    fn loads_builtin_column_emphasis() {
+        let registry = ColumnRegistry::load(None, true, SortMode::Address);
+        let lat_last = registry.column("lat_last").expect("lat_last column");
+        let lat_max = registry.column("lat_max").expect("lat_max column");
+
+        assert_eq!(lat_last.emphasis(), Some(Emphasis::Max));
+        assert_eq!(lat_max.emphasis(), Some(Emphasis::Max));
     }
 }

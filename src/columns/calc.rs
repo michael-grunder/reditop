@@ -1,7 +1,7 @@
 use crate::column::{
-    Align, CellText, Column, FormatSpec, RenderCtx, SortCtx, SortKey, WidthHint, compact_role,
-    default_label, format_millis, format_percent, nonnegative_f64_to_u64, parse_u64, status_text,
-    u64_to_f64,
+    Align, CellText, Column, Emphasis, FormatSpec, RenderCtx, SortCtx, SortKey, WidthHint,
+    compact_role, default_label, format_millis, format_percent, nonnegative_f64_to_u64, parse_u64,
+    status_text, u64_to_f64,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,7 @@ pub struct CalcColumn {
     pub kind: CalcKind,
     pub format: FormatSpec,
     pub missing: String,
+    pub emphasis: Option<Emphasis>,
     pub align: Align,
     pub width_hint: WidthHint,
 }
@@ -175,5 +176,9 @@ impl Column for CalcColumn {
 
     fn sort_key(&self, ctx: &SortCtx<'_>) -> SortKey {
         self.calc_sort_key(ctx)
+    }
+
+    fn emphasis(&self) -> Option<Emphasis> {
+        self.emphasis
     }
 }

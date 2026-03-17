@@ -28,6 +28,12 @@ pub enum SortKey {
     Str(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emphasis {
+    Max,
+    Min,
+}
+
 impl SortKey {
     pub fn compare(&self, other: &Self) -> Ordering {
         use SortKey::{Bool, F64, I64, Null, Str, U64};
@@ -87,6 +93,9 @@ pub trait Column: Send + Sync {
     fn width_hint(&self) -> WidthHint;
     fn render_cell(&self, ctx: &RenderCtx<'_>) -> CellText;
     fn sort_key(&self, ctx: &SortCtx<'_>) -> SortKey;
+    fn emphasis(&self) -> Option<Emphasis> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

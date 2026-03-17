@@ -146,6 +146,13 @@ header = "%MaxMem"
 calc = "maxmemory_percent"
 format = "pct:1"
 
+[columns.lat_max]
+type = "calc"
+header = "LatMax"
+calc = "latency_max_ms"
+format = "ms:2"
+emphasis = "max"
+
 [view.overview]
 visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "lat_max", "status"]
 
@@ -156,3 +163,6 @@ dir = "desc"
 
 `[theme]` colors support: `black`, `red`, `green`, `yellow`, `blue`,
 `magenta`, `cyan`, `gray`/`grey`, `white`.
+
+Overview columns also support `emphasis = "max"` or `emphasis = "min"` to bold
+the highest or lowest visible value each frame.
