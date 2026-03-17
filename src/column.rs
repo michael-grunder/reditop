@@ -144,6 +144,8 @@ pub fn format_bytes(bytes: u64) -> String {
     }
     if idx == 0 {
         format!("{bytes} {}", UNITS[idx])
+    } else if value.fract() == 0.0 {
+        format!("{value:.0} {}", UNITS[idx])
     } else {
         format!("{value:.1} {}", UNITS[idx])
     }

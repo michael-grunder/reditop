@@ -105,9 +105,7 @@ impl CalcColumn {
                 .cluster_label
                 .map_or(SortKey::Null, |value| SortKey::Str(value.to_string())),
             CalcKind::Status => SortKey::U64(u64::from(snap.status.severity())),
-            CalcKind::LatencyLastMs => snap
-                .last_latency_ms
-                .map_or(SortKey::Null, SortKey::F64),
+            CalcKind::LatencyLastMs => snap.last_latency_ms.map_or(SortKey::Null, SortKey::F64),
             CalcKind::LatencyMaxMs => SortKey::F64(snap.max_latency_ms),
             CalcKind::MaxmemoryPercent { used_key, max_key } => {
                 let used = parse_u64(snap, used_key).or(snap.used_memory_bytes);

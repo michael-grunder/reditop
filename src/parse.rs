@@ -19,8 +19,7 @@ impl ParsedInfo {
     }
 
     pub fn get_bool_01(&self, section: &str, key: &str) -> bool {
-        self.get(section, key)
-            .is_some_and(|value| value == "1")
+        self.get(section, key).is_some_and(|value| value == "1")
     }
 
     pub fn flat_map(&self) -> HashMap<String, String> {

@@ -36,13 +36,13 @@ max_width = 12
 
 [columns.used_mem]
 type = "info"
-header = "Memory"
+header = "Mem"
 info_key = "used_memory"
 value_type = "bytes"
 format = "bytes_human"
 align = "right"
 min_width = 10
-ideal_width = 14
+ideal_width = 12
 max_width = 18
 missing = "-"
 

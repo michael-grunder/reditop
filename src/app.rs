@@ -182,8 +182,10 @@ impl AppState {
     }
 
     pub fn sort_label(&self) -> String {
-        self.column_registry
-            .column(&self.sort_by).map_or_else(|| self.sort_by.clone(), |column| column.header().to_string())
+        self.column_registry.column(&self.sort_by).map_or_else(
+            || self.sort_by.clone(),
+            |column| column.header().to_string(),
+        )
     }
 
     pub fn open_sort_picker(&mut self) {

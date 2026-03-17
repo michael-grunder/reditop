@@ -187,6 +187,8 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
 }
 
 fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+    const TABLE_COLUMN_SPACING: u16 = 1;
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(5)])
@@ -227,7 +229,11 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         .iter()
         .filter_map(|key| app.column_registry.column(key.as_str()))
         .collect();
-    let widths = compute_column_widths(chunks[1].width.saturating_sub(2), &columns);
+    let widths = compute_column_widths(
+        chunks[1].width.saturating_sub(2),
+        &columns,
+        TABLE_COLUMN_SPACING,
+    );
 
     let table_rows: Vec<Row<'_>> = rows
         .iter()
@@ -276,6 +282,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 .borders(Borders::ALL)
                 .style(base_style(app)),
         )
+        .column_spacing(TABLE_COLUMN_SPACING)
         .row_highlight_style(selected_style)
         .highlight_symbol("> ");
 
@@ -286,13 +293,16 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 fn compute_column_widths(
     table_width: u16,
     columns: &[&std::sync::Arc<dyn crate::column::Column>],
+    column_spacing: u16,
 ) -> Vec<u16> {
     if columns.is_empty() {
         return Vec::new();
     }
 
+    let spacing_total = column_spacing.saturating_mul(columns.len().saturating_sub(1) as u16);
+    let content_width = table_width.saturating_sub(spacing_total);
     let mut widths = vec![0u16; columns.len()];
-    let mut remaining = table_width;
+    let mut remaining = content_width;
 
     for (idx, column) in columns.iter().enumerate() {
         let hint = column.width_hint();
@@ -309,6 +319,12 @@ fn compute_column_widths(
         let min = column.width_hint().min;
         widths[idx] = min;
         remaining = remaining.saturating_sub(min);
+    }
+
+    let used = widths.iter().copied().sum::<u16>();
+    if used > content_width {
+        shrink_widths_to_fit(&mut widths, content_width);
+        remaining = 0;
     }
 
     loop {
@@ -338,6 +354,18 @@ fn compute_column_widths(
     }
 
     widths
+}
+
+fn shrink_widths_to_fit(widths: &mut [u16], target: u16) {
+    while widths.iter().copied().sum::<u16>() > target {
+        let Some((idx, _)) = widths.iter().enumerate().max_by_key(|(_, width)| **width) else {
+            break;
+        };
+        if widths[idx] <= 1 {
+            break;
+        }
+        widths[idx] -= 1;
+    }
 }
 
 fn fit_cell_text(text: &str, width: usize, align: Align) -> String {
@@ -415,7 +443,8 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             .unwrap_or_else(|| "-".to_string()),
         instance
             .detail
-            .uptime_seconds.map_or_else(|| "-".to_string(), format_with_commas)
+            .uptime_seconds
+            .map_or_else(|| "-".to_string(), format_with_commas)
     );
     frame.render_widget(
         Paragraph::new(title).style(base_style(app)).block(
@@ -514,7 +543,8 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 (
                     "last_latency_ms",
                     instance
-                        .last_latency_ms.map_or_else(|| "-".to_string(), |v| format!("{v:.2}")),
+                        .last_latency_ms
+                        .map_or_else(|| "-".to_string(), |v| format!("{v:.2}")),
                 ),
                 ("max_latency_ms", format!("{:.2}", instance.max_latency_ms)),
                 ("avg_latency_ms", format!("{:.2}", instance.avg_latency_ms)),
@@ -568,7 +598,10 @@ fn format_optional_u64(value: Option<u64>) -> String {
 }
 
 fn format_optional_bytes(value: Option<u64>) -> String {
-    value.map_or_else(|| "-".to_string(), |bytes| format!("{} ({})", format_with_commas(bytes), human_bytes(bytes)))
+    value.map_or_else(
+        || "-".to_string(),
+        |bytes| format!("{} ({})", format_with_commas(bytes), human_bytes(bytes)),
+    )
 }
 
 fn format_with_commas(value: u64) -> String {
@@ -734,7 +767,8 @@ fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) 
             };
             let label = app
                 .column_registry
-                .column(column_key).map_or_else(|| column_key.clone(), |column| column.header().to_string());
+                .column(column_key)
+                .map_or_else(|| column_key.clone(), |column| column.header().to_string());
             Row::new(vec![Cell::from(format!("{label}{direction}"))])
         })
         .collect();
@@ -795,7 +829,13 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{Align, fit_cell_text, format_aligned_rows, format_with_commas, help_bindings};
+    use std::sync::Arc;
+
+    use super::{
+        Align, compute_column_widths, fit_cell_text, format_aligned_rows, format_with_commas,
+        help_bindings,
+    };
+    use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
 
     #[test]
     fn format_with_commas_groups_digits() {
@@ -829,5 +869,99 @@ mod tests {
     fn fit_cell_text_right_aligns_headers_and_values_consistently() {
         assert_eq!(fit_cell_text("Ops/s", 8, Align::Right), "   Ops/s");
         assert_eq!(fit_cell_text("123", 8, Align::Right), "     123");
+    }
+
+    struct TestColumn {
+        hint: WidthHint,
+    }
+
+    impl Column for TestColumn {
+        fn header(&self) -> &str {
+            ""
+        }
+
+        fn align(&self) -> Align {
+            Align::Left
+        }
+
+        fn width_hint(&self) -> WidthHint {
+            self.hint
+        }
+
+        fn render_cell(&self, _ctx: &RenderCtx<'_>) -> CellText {
+            CellText::plain(String::new())
+        }
+
+        fn sort_key(&self, _ctx: &SortCtx<'_>) -> SortKey {
+            SortKey::Null
+        }
+    }
+
+    #[test]
+    fn compute_column_widths_reserves_space_for_spacing() {
+        let a: Arc<dyn Column> = Arc::new(TestColumn {
+            hint: WidthHint {
+                min: 5,
+                ideal: 8,
+                max: None,
+                fixed: None,
+            },
+        });
+        let b: Arc<dyn Column> = Arc::new(TestColumn {
+            hint: WidthHint {
+                min: 5,
+                ideal: 8,
+                max: None,
+                fixed: None,
+            },
+        });
+        let c: Arc<dyn Column> = Arc::new(TestColumn {
+            hint: WidthHint {
+                min: 5,
+                ideal: 8,
+                max: None,
+                fixed: None,
+            },
+        });
+        let columns = vec![&a, &b, &c];
+
+        let widths = compute_column_widths(20, &columns, 1);
+
+        assert_eq!(widths, vec![6, 6, 6]);
+        assert_eq!(widths.iter().sum::<u16>() + 2, 20);
+    }
+
+    #[test]
+    fn compute_column_widths_shrinks_below_min_when_required() {
+        let a: Arc<dyn Column> = Arc::new(TestColumn {
+            hint: WidthHint {
+                min: 4,
+                ideal: 4,
+                max: None,
+                fixed: None,
+            },
+        });
+        let b: Arc<dyn Column> = Arc::new(TestColumn {
+            hint: WidthHint {
+                min: 4,
+                ideal: 4,
+                max: None,
+                fixed: None,
+            },
+        });
+        let c: Arc<dyn Column> = Arc::new(TestColumn {
+            hint: WidthHint {
+                min: 4,
+                ideal: 4,
+                max: None,
+                fixed: None,
+            },
+        });
+        let columns = vec![&a, &b, &c];
+
+        let widths = compute_column_widths(8, &columns, 1);
+
+        assert_eq!(widths.iter().sum::<u16>() + 2, 8);
+        assert!(widths.iter().all(|width| *width >= 1));
     }
 }
