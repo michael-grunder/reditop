@@ -529,9 +529,7 @@ fn default_visible_columns() -> Vec<String> {
         "alias".to_string(),
         "addr".to_string(),
         "role".to_string(),
-        "cluster".to_string(),
         "used_mem".to_string(),
-        "maxmem_pct".to_string(),
         "ops".to_string(),
         "lat_last".to_string(),
         "lat_max".to_string(),
@@ -612,7 +610,7 @@ foreground_color = "red"
 
         let registry = ColumnRegistry::load(Some(&path), false, SortMode::Address);
 
-        assert!(registry.overview_emphasis_style().bold);
+        assert!(!registry.overview_emphasis_style().bold);
         assert!(registry.overview_emphasis_style().italic);
         assert_eq!(
             registry.overview_emphasis_style().foreground,
@@ -622,7 +620,7 @@ foreground_color = "red"
         let ops = registry.column("ops").expect("ops column");
         let lat_max = registry.column("lat_max").expect("lat_max column");
 
-        assert!(ops.emphasis_style().expect("ops emphasis").bold);
+        assert!(!ops.emphasis_style().expect("ops emphasis").bold);
         assert!(ops.emphasis_style().expect("ops emphasis").italic);
         assert!(ops.emphasis_style().expect("ops emphasis").underlined);
         assert_eq!(

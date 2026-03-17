@@ -430,7 +430,7 @@ impl AppState {
                 .any(|tag| tag.to_ascii_lowercase().contains(&needle))
     }
 
-    fn cluster_labels(&self) -> HashMap<String, String> {
+    pub(crate) fn cluster_labels(&self) -> HashMap<String, String> {
         let mut ordered = BTreeSet::<String>::new();
         for instance in self.instances.values() {
             let raw_cluster = instance

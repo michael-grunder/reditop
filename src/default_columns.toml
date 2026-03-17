@@ -103,8 +103,13 @@ ideal_width = 9
 max_width = 10
 
 [view.overview]
-visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "lat_max", "status"]
+visible = ["alias", "addr", "role", "used_mem", "ops", "lat_last", "lat_max", "status"]
 
 [view.overview.sort]
 by = "addr"
 dir = "asc"
+
+[view.overview.emphasis_style]
+bold = false
+italic = false
+foreground_color = "yellow"

@@ -7,7 +7,7 @@
 - Polls one or more Redis targets every second (default, configurable)
 - Overview screen with:
   - generic, configurable columns (INFO-backed + calculated)
-  - defaults for alias/address/type/cluster/memory/ops/latency/status
+  - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
 - Detail screen with summary, latency, and raw `INFO`
 - Tree and flat overview modes
 - Sorting by currently visible column keys and substring filtering
@@ -162,7 +162,7 @@ foreground_color = "yellow"
 foreground_color = "red"
 
 [view.overview]
-visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "lat_max", "status"]
+visible = ["alias", "addr", "role", "used_mem", "ops", "lat_last", "lat_max", "status"]
 
 [view.overview.sort]
 by = "ops"

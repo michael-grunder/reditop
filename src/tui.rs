@@ -11,7 +11,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
 
 use crate::app::{ActiveView, AppState, FilterPromptMode};
@@ -203,6 +203,80 @@ fn overview_cell(fitted: String, emphasis_style: Option<EmphasisStyle>) -> Cell<
     Cell::from(Line::styled(fitted, style_from_emphasis(emphasis_style)))
 }
 
+fn overview_cluster_gutter_cell(
+    app: &AppState,
+    row: &crate::app::DisplayRow,
+    cluster_labels: &std::collections::HashMap<String, String>,
+) -> Cell<'static> {
+    let Some(instance) = app.instances.get(&row.key) else {
+        return Cell::from(" ");
+    };
+
+    let Some(color) = cluster_gutter_color(app, instance, cluster_labels) else {
+        return Cell::from(" ");
+    };
+
+    Cell::from(Line::from(vec![Span::styled(
+        "│",
+        Style::default().fg(color),
+    )]))
+}
+
+fn cluster_gutter_color(
+    app: &AppState,
+    instance: &crate::model::InstanceState,
+    cluster_labels: &std::collections::HashMap<String, String>,
+) -> Option<Color> {
+    let token = instance.cluster_id.as_deref().map_or_else(
+        || replication_group_token(app, instance),
+        |raw_cluster| cluster_labels.get(raw_cluster).cloned(),
+    )?;
+
+    Some(cluster_color_for_token(&token))
+}
+
+fn replication_group_token(
+    app: &AppState,
+    instance: &crate::model::InstanceState,
+) -> Option<String> {
+    match instance.kind {
+        crate::model::InstanceType::Primary => app
+            .instances
+            .values()
+            .any(|candidate| candidate.parent_addr.as_deref() == Some(instance.addr.as_str()))
+            .then(|| instance.addr.clone()),
+        crate::model::InstanceType::Replica => instance
+            .parent_addr
+            .as_deref()
+            .map(|parent| resolve_replication_group_addr(app, parent)),
+        crate::model::InstanceType::Standalone | crate::model::InstanceType::Cluster => None,
+    }
+}
+
+fn resolve_replication_group_addr(app: &AppState, parent: &str) -> String {
+    app.instances
+        .values()
+        .find(|candidate| candidate.key == parent || candidate.addr == parent)
+        .map_or_else(|| parent.to_string(), |candidate| candidate.addr.clone())
+}
+
+fn cluster_color_for_token(token: &str) -> Color {
+    const PALETTE: [Color; 7] = [
+        Color::Cyan,
+        Color::Yellow,
+        Color::Green,
+        Color::Magenta,
+        Color::Blue,
+        Color::Red,
+        Color::Gray,
+    ];
+
+    let index = token.bytes().fold(0usize, |acc, byte| {
+        acc.wrapping_mul(33).wrapping_add(usize::from(byte))
+    });
+    PALETTE[index % PALETTE.len()]
+}
+
 fn style_from_emphasis(emphasis_style: EmphasisStyle) -> Style {
     let mut style = Style::default();
     if emphasis_style.bold {
@@ -266,6 +340,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let rows = app.visible_rows();
     let column_keys = app.visible_column_keys();
+    let cluster_labels = app.cluster_labels();
     let emphasized = app.emphasized_rows_by_column(&rows);
     let columns: Vec<_> = column_keys
         .iter()
@@ -280,25 +355,23 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let table_rows: Vec<Row<'_>> = rows
         .iter()
         .map(|row| {
-            let cells = column_keys
-                .iter()
-                .enumerate()
-                .map(|(idx, key)| {
-                    let width = widths[idx];
-                    let align = columns[idx].align();
-                    let raw = app.render_cell(row, key).unwrap_or_default();
-                    let fitted = fit_cell_text(&raw, width as usize, align);
-                    let emphasis_style = emphasized
-                        .get(key)
-                        .filter(|winner| *winner == &row.key)
-                        .map(|_| {
-                            columns[idx]
-                                .emphasis_style()
-                                .unwrap_or_else(|| app.column_registry.overview_emphasis_style())
-                        });
-                    overview_cell(fitted, emphasis_style)
-                })
-                .collect::<Vec<Cell<'_>>>();
+            let mut cells = Vec::with_capacity(column_keys.len() + 1);
+            cells.push(overview_cluster_gutter_cell(app, row, &cluster_labels));
+            cells.extend(column_keys.iter().enumerate().map(|(idx, key)| {
+                let width = widths[idx];
+                let align = columns[idx].align();
+                let raw = app.render_cell(row, key).unwrap_or_default();
+                let fitted = fit_cell_text(&raw, width as usize, align);
+                let emphasis_style = emphasized
+                    .get(key)
+                    .filter(|winner| *winner == &row.key)
+                    .map(|_| {
+                        columns[idx]
+                            .emphasis_style()
+                            .unwrap_or_else(|| app.column_registry.overview_emphasis_style())
+                    });
+                overview_cell(fitted, emphasis_style)
+            }));
 
             let base = Row::new(cells);
             if row.stale {
@@ -309,22 +382,24 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         })
         .collect();
 
-    let constraints: Vec<Constraint> = widths.iter().copied().map(Constraint::Length).collect();
+    let constraints: Vec<Constraint> = std::iter::once(Constraint::Length(1))
+        .chain(widths.iter().copied().map(Constraint::Length))
+        .collect();
     let header = Row::new(
-        columns
-            .iter()
-            .zip(column_keys.iter())
-            .zip(widths.iter())
-            .map(|((column, key), width)| {
-                let label = sortable_header(column.header(), app, key);
-                Cell::from(fit_cell_text(&label, *width as usize, column.align()))
-            }),
+        std::iter::once(Cell::from(" ")).chain(
+            columns
+                .iter()
+                .zip(column_keys.iter())
+                .zip(widths.iter())
+                .map(|((column, key), width)| {
+                    let label = sortable_header(column.header(), app, key);
+                    Cell::from(fit_cell_text(&label, *width as usize, column.align()))
+                }),
+        ),
     )
     .style(base_style(app).add_modifier(Modifier::BOLD));
 
-    let selected_style = Style::default()
-        .fg(carat_color(app))
-        .bg(background_color(app));
+    let selected_style = Style::default().bg(background_color(app));
     let table = Table::new(table_rows, constraints)
         .header(header)
         .block(
@@ -879,8 +954,8 @@ mod tests {
     };
 
     use super::{
-        Align, compute_column_widths, draw, fit_cell_text, format_aligned_rows, format_with_commas,
-        help_bindings, is_quit_key,
+        Align, cluster_color_for_token, compute_column_widths, draw, fit_cell_text,
+        format_aligned_rows, format_with_commas, help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
@@ -1054,7 +1129,52 @@ mod tests {
     }
 
     #[test]
-    fn overview_renders_default_bold_modifier_for_emphasized_cells() {
+    fn overview_renders_cluster_gutter_with_stable_color() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.cluster_id = Some("cluster-b".into());
+        a.last_updated = Some(std::time::Instant::now());
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.cluster_id = Some("cluster-a".into());
+        b.last_updated = Some(std::time::Instant::now());
+
+        app.apply_update(a);
+        app.apply_update(b);
+        app.selected_index = 1;
+
+        let backend = TestBackend::new(100, 12);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("overview draw succeeds");
+
+        let buffer = terminal.backend().buffer().clone();
+        let lines = buffer_lines(&buffer);
+        let row = lines
+            .iter()
+            .position(|line| line.contains("6379"))
+            .expect("cluster row rendered");
+        let alias_col = char_column(&lines[row], "6379");
+        let gutter_col = alias_col - 2;
+        let width = usize::from(buffer.area.width);
+        let gutter_idx = row * width + gutter_col;
+
+        assert_eq!(buffer.content()[gutter_idx].symbol(), "│");
+        assert_eq!(
+            buffer.content()[gutter_idx].fg,
+            cluster_color_for_token("2"),
+            "gutter color should be derived from the logical cluster label"
+        );
+    }
+
+    #[test]
+    fn overview_renders_default_emphasis_without_underline() {
         let mut app = crate::app::AppState::new(
             default_settings(),
             ColumnRegistry::load(None, true, crate::model::SortMode::Address),
@@ -1109,14 +1229,14 @@ mod tests {
         let lat_max_idx = lat_row * width + lat_col;
 
         assert!(
-            buffer.content()[ops_idx].modifier.contains(Modifier::BOLD),
-            "ops winner should be bold"
+            !buffer.content()[ops_idx].modifier.contains(Modifier::BOLD),
+            "ops winner should use the shipped non-bold default emphasis style"
         );
         assert!(
-            buffer.content()[lat_max_idx]
+            !buffer.content()[lat_max_idx]
                 .modifier
                 .contains(Modifier::BOLD),
-            "latency max winner should be bold"
+            "latency max winner should use the shipped non-bold default emphasis style"
         );
         assert!(
             !buffer.content()[lat_max_idx]
@@ -1197,8 +1317,8 @@ underlined = true
         let lat_max_idx = lat_row * width + lat_col;
 
         assert!(
-            buffer.content()[ops_idx].modifier.contains(Modifier::BOLD),
-            "ops winner should inherit bold from global emphasis style"
+            !buffer.content()[ops_idx].modifier.contains(Modifier::BOLD),
+            "ops winner should preserve the default non-bold emphasis unless explicitly enabled"
         );
         assert!(
             buffer.content()[ops_idx]

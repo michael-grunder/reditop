@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added INFO flat key map snapshots on each instance update to support generic INFO column extraction.
 - Added configurable TUI theme settings via `[theme]` (`background_color`, `foreground_color`, `carat_color`, `warning_color`, `critical_color`).
 ### Changed
+- Replaced the default overview `Cluster` column with a compact color gutter between the selection carat and `Alias`, grouping rows by logical cluster or replication set while keeping cluster sort support available.
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.
 - Wired `main.rs` to full application modules (`app`, `cli`, `config`, `poller`, `tui`, `parse`, `topology`).
 - Updated CLI binary name/docs to `reditop`.
