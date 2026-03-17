@@ -7,29 +7,33 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-use crate::column::{Align, Column, Emphasis, FormatSpec, ValueType, WidthHint};
+use crate::column::{Align, Column, Emphasis, EmphasisStyle, FormatSpec, ValueType, WidthHint};
 use crate::columns::calc::{CalcColumn, CalcKind};
 use crate::columns::info::RedisInfoFieldColumn;
-use crate::model::{SortDirection, SortMode};
+use crate::model::{SortDirection, SortMode, UiColor};
 
 const DEFAULT_COLUMNS_TOML: &str = include_str!("default_columns.toml");
 
 pub struct ColumnRegistry {
+    column_defs: HashMap<String, ColumnDef>,
     columns: HashMap<String, Arc<dyn Column>>,
     column_order: Vec<String>,
     pub visible_overview: Vec<String>,
     pub default_sort_by: String,
     pub default_sort_direction: SortDirection,
+    pub overview_emphasis_style: EmphasisStyle,
 }
 
 impl ColumnRegistry {
     pub fn load(config_path: Option<&Path>, no_default_config: bool, cli_sort: SortMode) -> Self {
         let mut registry = Self {
+            column_defs: HashMap::new(),
             columns: HashMap::new(),
             column_order: Vec::new(),
             visible_overview: Vec::new(),
             default_sort_by: legacy_sort_key(cli_sort).to_string(),
             default_sort_direction: legacy_sort_direction(cli_sort),
+            overview_emphasis_style: EmphasisStyle::default_overview(),
         };
 
         if let Err(err) = registry.apply_layer(DEFAULT_COLUMNS_TOML) {
@@ -91,14 +95,19 @@ impl ColumnRegistry {
             .collect()
     }
 
+    pub const fn overview_emphasis_style(&self) -> EmphasisStyle {
+        self.overview_emphasis_style
+    }
+
     fn apply_layer(&mut self, input: &str) -> Result<()> {
         let config: ColumnFileConfig = toml::from_str(input)?;
 
         if let Some(columns) = config.columns {
             for (key, def) in columns {
-                let column = build_column(&key, &def)?;
-                let exists = self.columns.insert(key.clone(), Arc::from(column));
-                if exists.is_none() {
+                if let Some(existing) = self.column_defs.get_mut(&key) {
+                    existing.merge(def);
+                } else {
+                    self.column_defs.insert(key.clone(), def);
                     self.column_order.push(key);
                 }
             }
@@ -118,8 +127,28 @@ impl ColumnRegistry {
                     self.default_sort_direction = dir;
                 }
             }
+            if let Some(style) = overview.emphasis_style {
+                self.overview_emphasis_style =
+                    resolve_emphasis_style(self.overview_emphasis_style, &style)?;
+            }
         }
 
+        self.rebuild_columns()?;
+
+        Ok(())
+    }
+
+    fn rebuild_columns(&mut self) -> Result<()> {
+        let mut columns = HashMap::new();
+        for key in &self.column_order {
+            let Some(def) = self.column_defs.get(key) else {
+                continue;
+            };
+            let column = build_column(key, def, self.overview_emphasis_style)?;
+            let old = columns.insert(key.clone(), Arc::from(column));
+            debug_assert!(old.is_none());
+        }
+        self.columns = columns;
         Ok(())
     }
 }
@@ -164,6 +193,7 @@ struct ViewConfig {
 struct OverviewConfig {
     visible: Option<Vec<String>>,
     sort: Option<SortConfig>,
+    emphasis_style: Option<EmphasisStyleDef>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -172,13 +202,14 @@ struct SortConfig {
     dir: Option<SortDirection>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 struct ColumnDef {
     #[serde(rename = "type")]
-    type_name: String,
+    type_name: Option<String>,
     header: Option<String>,
     align: Option<String>,
     emphasis: Option<String>,
+    emphasis_style: Option<EmphasisStyleDef>,
     min_width: Option<u16>,
     ideal_width: Option<u16>,
     max_width: Option<u16>,
@@ -192,7 +223,93 @@ struct ColumnDef {
     calc: Option<String>,
 }
 
-fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
+impl ColumnDef {
+    fn merge(&mut self, incoming: Self) {
+        if incoming.type_name.is_some() {
+            self.type_name = incoming.type_name;
+        }
+        if incoming.header.is_some() {
+            self.header = incoming.header;
+        }
+        if incoming.align.is_some() {
+            self.align = incoming.align;
+        }
+        if incoming.emphasis.is_some() {
+            self.emphasis = incoming.emphasis;
+        }
+        merge_option(
+            &mut self.emphasis_style,
+            incoming.emphasis_style,
+            EmphasisStyleDef::merge,
+        );
+        if incoming.min_width.is_some() {
+            self.min_width = incoming.min_width;
+        }
+        if incoming.ideal_width.is_some() {
+            self.ideal_width = incoming.ideal_width;
+        }
+        if incoming.max_width.is_some() {
+            self.max_width = incoming.max_width;
+        }
+        if incoming.fixed_width.is_some() {
+            self.fixed_width = incoming.fixed_width;
+        }
+        if incoming.info_key.is_some() {
+            self.info_key = incoming.info_key;
+        }
+        if incoming.value_type.is_some() {
+            self.value_type = incoming.value_type;
+        }
+        if incoming.format.is_some() {
+            self.format = incoming.format;
+        }
+        if incoming.missing.is_some() {
+            self.missing = incoming.missing;
+        }
+        if incoming.calc.is_some() {
+            self.calc = incoming.calc;
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+struct EmphasisStyleDef {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underlined: Option<bool>,
+    dim: Option<bool>,
+    reversed: Option<bool>,
+    foreground_color: Option<String>,
+}
+
+impl EmphasisStyleDef {
+    fn merge(&mut self, incoming: Self) {
+        if incoming.bold.is_some() {
+            self.bold = incoming.bold;
+        }
+        if incoming.italic.is_some() {
+            self.italic = incoming.italic;
+        }
+        if incoming.underlined.is_some() {
+            self.underlined = incoming.underlined;
+        }
+        if incoming.dim.is_some() {
+            self.dim = incoming.dim;
+        }
+        if incoming.reversed.is_some() {
+            self.reversed = incoming.reversed;
+        }
+        if incoming.foreground_color.is_some() {
+            self.foreground_color = incoming.foreground_color;
+        }
+    }
+}
+
+fn build_column(
+    key: &str,
+    def: &ColumnDef,
+    base_emphasis_style: EmphasisStyle,
+) -> Result<Box<dyn Column>> {
     let width_hint = WidthHint {
         min: def.min_width.unwrap_or(4),
         ideal: def.ideal_width.unwrap_or(8),
@@ -202,8 +319,17 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
     let header = def.header.clone().unwrap_or_else(|| key.to_string());
     let missing = def.missing.clone().unwrap_or_default();
     let emphasis = def.emphasis.as_deref().map(parse_emphasis).transpose()?;
+    let emphasis_style = def
+        .emphasis_style
+        .as_ref()
+        .map(|style| resolve_emphasis_style(base_emphasis_style, style))
+        .transpose()?;
 
-    match def.type_name.as_str() {
+    match def
+        .type_name
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("column {key} missing type"))?
+    {
         "info" => {
             let info_key = def
                 .info_key
@@ -225,6 +351,7 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
                 format,
                 missing,
                 emphasis,
+                emphasis_style,
                 align,
                 width_hint,
             }))
@@ -249,12 +376,27 @@ fn build_column(key: &str, def: &ColumnDef) -> Result<Box<dyn Column>> {
                 format,
                 missing,
                 emphasis,
+                emphasis_style,
                 align,
                 width_hint,
             }))
         }
         other => bail!("unsupported column type for {key}: {other}"),
     }
+}
+
+fn resolve_emphasis_style(base: EmphasisStyle, raw: &EmphasisStyleDef) -> Result<EmphasisStyle> {
+    Ok(EmphasisStyle {
+        bold: raw.bold.unwrap_or(base.bold),
+        italic: raw.italic.unwrap_or(base.italic),
+        underlined: raw.underlined.unwrap_or(base.underlined),
+        dim: raw.dim.unwrap_or(base.dim),
+        reversed: raw.reversed.unwrap_or(base.reversed),
+        foreground: match raw.foreground_color.as_deref() {
+            Some(color) => Some(parse_color(color)?),
+            None => base.foreground,
+        },
+    })
 }
 
 fn parse_value_type(raw: &str) -> Result<ValueType> {
@@ -275,6 +417,32 @@ fn parse_emphasis(raw: &str) -> Result<Emphasis> {
         "max" => Ok(Emphasis::Max),
         "min" => Ok(Emphasis::Min),
         other => bail!("unsupported emphasis mode: {other}"),
+    }
+}
+
+fn parse_color(raw: &str) -> Result<UiColor> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "black" => Ok(UiColor::Black),
+        "red" => Ok(UiColor::Red),
+        "green" => Ok(UiColor::Green),
+        "yellow" => Ok(UiColor::Yellow),
+        "blue" => Ok(UiColor::Blue),
+        "magenta" => Ok(UiColor::Magenta),
+        "cyan" => Ok(UiColor::Cyan),
+        "gray" | "grey" => Ok(UiColor::Gray),
+        "white" => Ok(UiColor::White),
+        _ => bail!(
+            "invalid emphasis color: {raw} (supported: black, red, green, yellow, blue, magenta, cyan, gray, white)"
+        ),
+    }
+}
+
+fn merge_option<T>(slot: &mut Option<T>, incoming: Option<T>, merge: impl FnOnce(&mut T, T)) {
+    match (slot.as_mut(), incoming) {
+        (Some(current), Some(value)) => merge(current, value),
+        (None, Some(value)) => *slot = Some(value),
+        (_, None) => {}
     }
 }
 
@@ -398,9 +566,11 @@ pub const fn legacy_sort_direction(mode: SortMode) -> SortDirection {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::ColumnRegistry;
     use crate::column::Emphasis;
-    use crate::model::SortMode;
+    use crate::model::{SortMode, UiColor};
 
     #[test]
     fn loads_builtin_columns() {
@@ -418,5 +588,55 @@ mod tests {
 
         assert_eq!(lat_last.emphasis(), Some(Emphasis::Max));
         assert_eq!(lat_max.emphasis(), Some(Emphasis::Max));
+    }
+
+    #[test]
+    fn merges_global_and_per_column_emphasis_style_overrides() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[view.overview.emphasis_style]
+italic = true
+foreground_color = "yellow"
+
+[columns.ops.emphasis_style]
+underlined = true
+
+[columns.lat_max.emphasis_style]
+foreground_color = "red"
+"#,
+        )
+        .expect("write config");
+
+        let registry = ColumnRegistry::load(Some(&path), false, SortMode::Address);
+
+        assert!(registry.overview_emphasis_style().bold);
+        assert!(registry.overview_emphasis_style().italic);
+        assert_eq!(
+            registry.overview_emphasis_style().foreground,
+            Some(UiColor::Yellow)
+        );
+
+        let ops = registry.column("ops").expect("ops column");
+        let lat_max = registry.column("lat_max").expect("lat_max column");
+
+        assert!(ops.emphasis_style().expect("ops emphasis").bold);
+        assert!(ops.emphasis_style().expect("ops emphasis").italic);
+        assert!(ops.emphasis_style().expect("ops emphasis").underlined);
+        assert_eq!(
+            ops.emphasis_style().expect("ops emphasis").foreground,
+            Some(UiColor::Yellow)
+        );
+
+        assert_eq!(
+            lat_max
+                .emphasis_style()
+                .expect("lat max emphasis")
+                .foreground,
+            Some(UiColor::Red)
+        );
+        assert!(lat_max.emphasis_style().expect("lat max emphasis").italic);
     }
 }

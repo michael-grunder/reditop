@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
-- Overview max/min emphasis is now easier to see: selected rows no longer bold the entire line, and emphasized winner cells add underline alongside bold so highlighted maxima remain visible even on the active row.
+- Overview emphasis styling is no longer hard-wired to underline, and can now be configured from TOML without changing the winner-selection rule.
 
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.
@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a generic overview column system with pluggable column trait, sortable typed sort keys, width/alignment metadata, and per-column rendering helpers.
 - Added built-in configurable column registry (`default_columns.toml`) with `info` and `calc` column kinds plus config-driven visible column/sort selection.
 - Added optional per-column frame emphasis (`emphasis = "max"` / `"min"`) so visible winners such as highest latency can be rendered in bold without changing sort order.
+- Added configurable overview emphasis styling via `[view.overview.emphasis_style]` plus per-column overrides under `[columns.<key>.emphasis_style]`.
 - Added INFO flat key map snapshots on each instance update to support generic INFO column extraction.
 - Added configurable TUI theme settings via `[theme]` (`background_color`, `foreground_color`, `carat_color`, `warning_color`, `critical_color`).
 ### Changed

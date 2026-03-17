@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::model::{InstanceState, Status};
+use crate::model::{InstanceState, Status, UiColor};
 use crate::target_addr::strip_host;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +32,30 @@ pub enum SortKey {
 pub enum Emphasis {
     Max,
     Min,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EmphasisStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underlined: bool,
+    pub dim: bool,
+    pub reversed: bool,
+    pub foreground: Option<UiColor>,
+}
+
+impl EmphasisStyle {
+    pub const fn default_overview() -> Self {
+        Self {
+            bold: true,
+            italic: false,
+            underlined: false,
+            dim: false,
+            reversed: false,
+            foreground: None,
+        }
+    }
 }
 
 impl SortKey {
@@ -94,6 +118,9 @@ pub trait Column: Send + Sync {
     fn render_cell(&self, ctx: &RenderCtx<'_>) -> CellText;
     fn sort_key(&self, ctx: &SortCtx<'_>) -> SortKey;
     fn emphasis(&self) -> Option<Emphasis> {
+        None
+    }
+    fn emphasis_style(&self) -> Option<EmphasisStyle> {
         None
     }
 }

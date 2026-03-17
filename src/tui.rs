@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs,
 
 use crate::app::{ActiveView, AppState, FilterPromptMode};
 use crate::cli::LaunchConfig;
-use crate::column::Align;
+use crate::column::{Align, EmphasisStyle};
 use crate::poller;
 use crate::registry::ColumnRegistry;
 
@@ -195,20 +195,38 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     }
 }
 
-fn overview_cell(
-    fitted: String,
-    emphasized: bool,
-) -> Cell<'static> {
-    if emphasized {
-        Cell::from(Line::styled(
-            fitted,
-            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        ))
-    } else {
-        Cell::from(fitted)
-    }
+fn overview_cell(fitted: String, emphasis_style: Option<EmphasisStyle>) -> Cell<'static> {
+    let Some(emphasis_style) = emphasis_style else {
+        return Cell::from(fitted);
+    };
+
+    Cell::from(Line::styled(fitted, style_from_emphasis(emphasis_style)))
 }
 
+fn style_from_emphasis(emphasis_style: EmphasisStyle) -> Style {
+    let mut style = Style::default();
+    if emphasis_style.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if emphasis_style.italic {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if emphasis_style.underlined {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    if emphasis_style.dim {
+        style = style.add_modifier(Modifier::DIM);
+    }
+    if emphasis_style.reversed {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    if let Some(color) = emphasis_style.foreground {
+        style = style.fg(color.to_ratatui_color());
+    }
+    style
+}
+
+#[allow(clippy::too_many_lines)]
 fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     const TABLE_COLUMN_SPACING: u16 = 1;
 
@@ -270,10 +288,15 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                     let align = columns[idx].align();
                     let raw = app.render_cell(row, key).unwrap_or_default();
                     let fitted = fit_cell_text(&raw, width as usize, align);
-                    overview_cell(
-                        fitted,
-                        emphasized.get(key).is_some_and(|winner| winner == &row.key),
-                    )
+                    let emphasis_style = emphasized
+                        .get(key)
+                        .filter(|winner| *winner == &row.key)
+                        .map(|_| {
+                            columns[idx]
+                                .emphasis_style()
+                                .unwrap_or_else(|| app.column_registry.overview_emphasis_style())
+                        });
+                    overview_cell(fitted, emphasis_style)
                 })
                 .collect::<Vec<Cell<'_>>>();
 
@@ -852,12 +875,12 @@ mod tests {
     use ratatui::{
         Terminal,
         backend::TestBackend,
-        style::Modifier,
+        style::{Color, Modifier},
     };
 
     use super::{
-        Align, compute_column_widths, draw, fit_cell_text, format_aligned_rows,
-        format_with_commas, help_bindings, is_quit_key,
+        Align, compute_column_widths, draw, fit_cell_text, format_aligned_rows, format_with_commas,
+        help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
@@ -869,7 +892,11 @@ mod tests {
         buffer
             .content()
             .chunks(width)
-            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
+            .map(|row| {
+                row.iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            })
             .collect()
     }
 
@@ -1027,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_renders_bold_modifier_for_emphasized_cells() {
+    fn overview_renders_default_bold_modifier_for_emphasized_cells() {
         let mut app = crate::app::AppState::new(
             default_settings(),
             ColumnRegistry::load(None, true, crate::model::SortMode::Address),
@@ -1082,16 +1109,8 @@ mod tests {
         let lat_max_idx = lat_row * width + lat_col;
 
         assert!(
-            buffer.content()[ops_idx]
-                .modifier
-                .contains(Modifier::BOLD),
+            buffer.content()[ops_idx].modifier.contains(Modifier::BOLD),
             "ops winner should be bold"
-        );
-        assert!(
-            buffer.content()[ops_idx]
-                .modifier
-                .contains(Modifier::UNDERLINED),
-            "ops winner should be underlined"
         );
         assert!(
             buffer.content()[lat_max_idx]
@@ -1100,10 +1119,107 @@ mod tests {
             "latency max winner should be bold"
         );
         assert!(
-            buffer.content()[lat_max_idx]
+            !buffer.content()[lat_max_idx]
                 .modifier
                 .contains(Modifier::UNDERLINED),
-            "latency max winner should be underlined"
+            "latency max winner should not be underlined by default"
         );
+    }
+
+    #[test]
+    fn overview_renders_configured_emphasis_modifiers_and_color() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[view.overview.emphasis_style]
+italic = true
+foreground_color = "yellow"
+
+[columns.ops.emphasis_style]
+underlined = true
+"#,
+        )
+        .expect("write config");
+
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(Some(&path), false, crate::model::SortMode::Address),
+        );
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.ops_per_sec = Some(4);
+        a.last_latency_ms = Some(0.25);
+        a.max_latency_ms = 1.4;
+        a.status = Status::Ok;
+        a.last_updated = Some(std::time::Instant::now());
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.ops_per_sec = Some(99);
+        b.last_latency_ms = Some(0.95);
+        b.max_latency_ms = 0.8;
+        b.status = Status::Ok;
+        b.last_updated = Some(std::time::Instant::now());
+
+        let mut c = InstanceState::new("c".into(), "127.0.0.1:6381".into());
+        c.ops_per_sec = Some(3);
+        c.last_latency_ms = Some(0.40);
+        c.max_latency_ms = 2.1;
+        c.status = Status::Ok;
+        c.last_updated = Some(std::time::Instant::now());
+
+        app.apply_update(a);
+        app.apply_update(b);
+        app.apply_update(c);
+
+        let backend = TestBackend::new(100, 12);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("overview draw succeeds");
+
+        let buffer = terminal.backend().buffer().clone();
+        let lines = buffer_lines(&buffer);
+        let ops_row = lines
+            .iter()
+            .position(|line| line.contains("6380") && line.contains("99"))
+            .expect("ops winner row rendered");
+        let ops_col = char_column(&lines[ops_row], "99");
+        let lat_row = lines
+            .iter()
+            .position(|line| line.contains("6381") && line.contains("2.10"))
+            .expect("latency max row rendered");
+        let lat_col = char_column(&lines[lat_row], "2.10");
+        let width = usize::from(buffer.area.width);
+        let ops_idx = ops_row * width + ops_col;
+        let lat_max_idx = lat_row * width + lat_col;
+
+        assert!(
+            buffer.content()[ops_idx].modifier.contains(Modifier::BOLD),
+            "ops winner should inherit bold from global emphasis style"
+        );
+        assert!(
+            buffer.content()[ops_idx]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "ops winner should apply per-column underline"
+        );
+        assert!(
+            buffer.content()[ops_idx]
+                .modifier
+                .contains(Modifier::ITALIC),
+            "ops winner should inherit global italic"
+        );
+        assert_eq!(buffer.content()[ops_idx].fg, Color::Yellow);
+
+        assert!(
+            buffer.content()[lat_max_idx]
+                .modifier
+                .contains(Modifier::ITALIC),
+            "latency winner should inherit global italic"
+        );
+        assert_eq!(buffer.content()[lat_max_idx].fg, Color::Yellow);
     }
 }

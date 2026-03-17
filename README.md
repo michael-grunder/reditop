@@ -153,6 +153,14 @@ calc = "latency_max_ms"
 format = "ms:2"
 emphasis = "max"
 
+[view.overview.emphasis_style]
+bold = true
+italic = false
+foreground_color = "yellow"
+
+[columns.lat_max.emphasis_style]
+foreground_color = "red"
+
 [view.overview]
 visible = ["alias", "addr", "role", "cluster", "used_mem", "ops", "lat_last", "lat_max", "status"]
 
@@ -164,5 +172,10 @@ dir = "desc"
 `[theme]` colors support: `black`, `red`, `green`, `yellow`, `blue`,
 `magenta`, `cyan`, `gray`/`grey`, `white`.
 
-Overview columns also support `emphasis = "max"` or `emphasis = "min"` to bold
+Overview columns also support `emphasis = "max"` or `emphasis = "min"` to mark
 the highest or lowest visible value each frame.
+
+Emphasis styling is configurable with `[view.overview.emphasis_style]` and may be
+overridden per column with `[columns.<key>.emphasis_style]`. Supported style
+keys are `bold`, `italic`, `underlined`, `dim`, `reversed`, and
+`foreground_color`.
