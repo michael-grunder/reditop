@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
+- Overview max/min emphasis is now easier to see: selected rows no longer bold the entire line, and emphasized winner cells add underline alongside bold so highlighted maxima remain visible even on the active row.
 
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.

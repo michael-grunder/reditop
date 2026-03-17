@@ -11,6 +11,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
 
 use crate::app::{ActiveView, AppState, FilterPromptMode};
@@ -194,6 +195,20 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     }
 }
 
+fn overview_cell(
+    fitted: String,
+    emphasized: bool,
+) -> Cell<'static> {
+    if emphasized {
+        Cell::from(Line::styled(
+            fitted,
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ))
+    } else {
+        Cell::from(fitted)
+    }
+}
+
 fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     const TABLE_COLUMN_SPACING: u16 = 1;
 
@@ -254,11 +269,11 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                     let width = widths[idx];
                     let align = columns[idx].align();
                     let raw = app.render_cell(row, key).unwrap_or_default();
-                    let mut cell = Cell::from(fit_cell_text(&raw, width as usize, align));
-                    if emphasized.get(key).is_some_and(|winner| winner == &row.key) {
-                        cell = cell.style(base_style(app).add_modifier(Modifier::BOLD));
-                    }
-                    cell
+                    let fitted = fit_cell_text(&raw, width as usize, align);
+                    overview_cell(
+                        fitted,
+                        emphasized.get(key).is_some_and(|winner| winner == &row.key),
+                    )
                 })
                 .collect::<Vec<Cell<'_>>>();
 
@@ -286,8 +301,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let selected_style = Style::default()
         .fg(carat_color(app))
-        .bg(background_color(app))
-        .add_modifier(Modifier::BOLD);
+        .bg(background_color(app));
     let table = Table::new(table_rows, constraints)
         .header(header)
         .block(
@@ -835,12 +849,34 @@ mod tests {
     use std::sync::Arc;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::Modifier,
+    };
 
     use super::{
-        Align, compute_column_widths, fit_cell_text, format_aligned_rows, format_with_commas,
-        help_bindings, is_quit_key,
+        Align, compute_column_widths, draw, fit_cell_text, format_aligned_rows,
+        format_with_commas, help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
+    use crate::config::default_settings;
+    use crate::model::{InstanceState, Status, ViewMode};
+    use crate::registry::ColumnRegistry;
+
+    fn buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+        let width = usize::from(buffer.area.width);
+        buffer
+            .content()
+            .chunks(width)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
+            .collect()
+    }
+
+    fn char_column(line: &str, needle: &str) -> usize {
+        let byte_idx = line.find(needle).expect("needle rendered in line");
+        line[..byte_idx].chars().count()
+    }
 
     #[test]
     fn format_with_commas_groups_digits() {
@@ -988,5 +1024,86 @@ mod tests {
 
         assert_eq!(widths.iter().sum::<u16>() + 2, 8);
         assert!(widths.iter().all(|width| *width >= 1));
+    }
+
+    #[test]
+    fn overview_renders_bold_modifier_for_emphasized_cells() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.ops_per_sec = Some(4);
+        a.last_latency_ms = Some(0.25);
+        a.max_latency_ms = 1.4;
+        a.status = Status::Ok;
+        a.last_updated = Some(std::time::Instant::now());
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.ops_per_sec = Some(99);
+        b.last_latency_ms = Some(0.95);
+        b.max_latency_ms = 0.8;
+        b.status = Status::Ok;
+        b.last_updated = Some(std::time::Instant::now());
+
+        let mut c = InstanceState::new("c".into(), "127.0.0.1:6381".into());
+        c.ops_per_sec = Some(3);
+        c.last_latency_ms = Some(0.40);
+        c.max_latency_ms = 2.1;
+        c.status = Status::Ok;
+        c.last_updated = Some(std::time::Instant::now());
+
+        app.apply_update(a);
+        app.apply_update(b);
+        app.apply_update(c);
+
+        let backend = TestBackend::new(100, 12);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("overview draw succeeds");
+
+        let buffer = terminal.backend().buffer().clone();
+        let lines = buffer_lines(&buffer);
+        let ops_row = lines
+            .iter()
+            .position(|line| line.contains("6380") && line.contains("99"))
+            .expect("ops winner row rendered");
+        let ops_col = char_column(&lines[ops_row], "99");
+        let lat_row = lines
+            .iter()
+            .position(|line| line.contains("6381") && line.contains("2.10"))
+            .expect("latency max row rendered");
+        let lat_col = char_column(&lines[lat_row], "2.10");
+        let width = usize::from(buffer.area.width);
+        let ops_idx = ops_row * width + ops_col;
+        let lat_max_idx = lat_row * width + lat_col;
+
+        assert!(
+            buffer.content()[ops_idx]
+                .modifier
+                .contains(Modifier::BOLD),
+            "ops winner should be bold"
+        );
+        assert!(
+            buffer.content()[ops_idx]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "ops winner should be underlined"
+        );
+        assert!(
+            buffer.content()[lat_max_idx]
+                .modifier
+                .contains(Modifier::BOLD),
+            "latency max winner should be bold"
+        );
+        assert!(
+            buffer.content()[lat_max_idx]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "latency max winner should be underlined"
+        );
     }
 }
