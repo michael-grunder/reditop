@@ -67,6 +67,7 @@ min_width = 6
 ideal_width = 8
 max_width = 10
 missing = "-"
+emphasis = "max"
 
 [columns.lat_last]
 type = "calc"
