@@ -2,6 +2,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use redis::Value;
 
+use crate::model::CommandStat;
+
 #[derive(Debug, Clone, Default)]
 pub struct ParsedInfo {
     pub sections: HashMap<String, HashMap<String, String>>,
@@ -56,6 +58,48 @@ pub fn parse_info(input: &str) -> ParsedInfo {
     }
 
     parsed
+}
+
+pub fn parse_commandstats(info: &ParsedInfo) -> Vec<CommandStat> {
+    let Some(section) = info.sections.get("commandstats") else {
+        return Vec::new();
+    };
+
+    let mut stats = section
+        .iter()
+        .filter_map(|(key, value)| parse_commandstat_entry(key, value))
+        .collect::<Vec<_>>();
+    stats.sort_by(|left, right| {
+        right
+            .calls
+            .cmp(&left.calls)
+            .then_with(|| left.command.cmp(&right.command))
+    });
+    stats
+}
+
+fn parse_commandstat_entry(key: &str, value: &str) -> Option<CommandStat> {
+    let command = key.strip_prefix("cmdstat_")?.to_string();
+    let mut calls = None;
+    let mut usec = None;
+    let mut usec_per_call = None;
+
+    for field in value.split(',') {
+        let (field_key, field_value) = field.split_once('=')?;
+        match field_key {
+            "calls" => calls = field_value.parse::<u64>().ok(),
+            "usec" => usec = field_value.parse::<u64>().ok(),
+            "usec_per_call" => usec_per_call = field_value.parse::<f64>().ok(),
+            _ => {}
+        }
+    }
+
+    Some(CommandStat {
+        command,
+        calls: calls?,
+        usec: usec?,
+        usec_per_call: usec_per_call?,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,7 +357,9 @@ mod tests {
 
     use redis::Value;
 
-    use super::{collect_cluster_shard_addresses, parse_cluster_shards, parse_info};
+    use super::{
+        collect_cluster_shard_addresses, parse_cluster_shards, parse_commandstats, parse_info,
+    };
 
     #[test]
     fn parses_info_sections_and_values() {
@@ -324,6 +370,20 @@ mod tests {
         assert_eq!(parsed.get_u64("server", "uptime_in_seconds"), Some(123));
         assert_eq!(parsed.get_u64("memory", "used_memory"), Some(4096));
         assert!(parsed.get_bool_01("cluster", "cluster_enabled"));
+    }
+
+    #[test]
+    fn parses_and_sorts_commandstats_by_calls_descending() {
+        let info = "# Commandstats\ncmdstat_get:calls=100007,usec=173592,usec_per_call=1.74,rejected_calls=0,failed_calls=0\ncmdstat_echo:calls=2057,usec=49361425,usec_per_call=23996.80,rejected_calls=0,failed_calls=0\ncmdstat_lrange:calls=400000,usec=6420146,usec_per_call=16.05,rejected_calls=0,failed_calls=0\n";
+        let parsed = parse_info(info);
+        let stats = parse_commandstats(&parsed);
+
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0].command, "lrange");
+        assert_eq!(stats[0].calls, 400_000);
+        assert_eq!(stats[1].command, "get");
+        assert_eq!(stats[1].usec, 173_592);
+        assert!((stats[2].usec_per_call - 23_996.80).abs() < f64::EPSILON);
     }
 
     #[test]

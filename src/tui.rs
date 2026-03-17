@@ -25,7 +25,7 @@ struct DetailTabSpec {
     shortcut: char,
 }
 
-const DETAIL_TABS: [DetailTabSpec; 3] = [
+const DETAIL_TABS: [DetailTabSpec; 4] = [
     DetailTabSpec {
         title: "Summary",
         shortcut: 's',
@@ -37,6 +37,10 @@ const DETAIL_TABS: [DetailTabSpec; 3] = [
     DetailTabSpec {
         title: "Info Raw",
         shortcut: 'i',
+    },
+    DetailTabSpec {
+        title: "Commandstats",
+        shortcut: 'c',
     },
 ];
 
@@ -701,7 +705,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 chunks[2],
             );
         }
-        _ => {
+        2 => {
             let body = instance
                 .detail
                 .raw_info
@@ -720,6 +724,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 chunks[2],
             );
         }
+        _ => draw_commandstats(frame, app, chunks[2], &instance.detail.commandstats),
     }
 }
 
@@ -744,6 +749,71 @@ fn detail_tabs_widget(app: &AppState) -> Tabs<'static> {
                 .bg(carat_color(app))
                 .add_modifier(Modifier::BOLD),
         )
+}
+
+fn draw_commandstats(
+    frame: &mut ratatui::Frame<'_>,
+    app: &AppState,
+    area: Rect,
+    stats: &[crate::model::CommandStat],
+) {
+    if stats.is_empty() {
+        frame.render_widget(
+            Paragraph::new("INFO COMMANDSTATS not available")
+                .style(base_style(app))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Commandstats")
+                        .style(base_style(app)),
+                ),
+            area,
+        );
+        return;
+    }
+
+    let mut sorted_stats = stats.to_vec();
+    sorted_stats.sort_by(|left, right| {
+        right
+            .calls
+            .cmp(&left.calls)
+            .then_with(|| left.command.cmp(&right.command))
+    });
+
+    let rows: Vec<Row<'_>> = sorted_stats
+        .iter()
+        .map(|stat| {
+            Row::new(vec![
+                Cell::from(stat.command.clone()),
+                Cell::from(format!("{:>14}", format_with_commas(stat.calls))),
+                Cell::from(format!("{:>14}", format_with_commas(stat.usec))),
+                Cell::from(format!("{:>15.2}", stat.usec_per_call)),
+            ])
+        })
+        .collect();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(20),
+            Constraint::Length(14),
+            Constraint::Length(14),
+            Constraint::Length(15),
+        ],
+    )
+    .header(
+        Row::new(vec!["Command", "Calls", "Usec", "Usec/Call"])
+            .style(base_style(app).add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Commandstats")
+            .style(base_style(app)),
+    )
+    .style(base_style(app))
+    .column_spacing(1);
+
+    frame.render_widget(table, area);
 }
 
 fn detail_tab_label(tab: &DetailTabSpec) -> Line<'static> {
@@ -853,8 +923,8 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ("Tab/Right", "Next detail panel"),
         ("Left", "Previous detail panel"),
         (
-            "S / L / I",
-            "Jump to Summary, Latency, or Info Raw in detail",
+            "S / L / I / C",
+            "Jump to Summary, Latency, Info Raw, or Commandstats in detail",
         ),
         ("Up/Down", "Move selection in overview"),
         ("?", "Toggle help overlay"),
@@ -888,7 +958,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I jump to detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C jump to detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1016,7 +1086,7 @@ mod tests {
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
-    use crate::model::{InstanceState, Status, ViewMode};
+    use crate::model::{CommandStat, InstanceState, Status, ViewMode};
     use crate::registry::ColumnRegistry;
 
     fn buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
@@ -1070,6 +1140,7 @@ mod tests {
         assert_eq!(detail_tab_index_for_shortcut('s'), Some(0));
         assert_eq!(detail_tab_index_for_shortcut('L'), Some(1));
         assert_eq!(detail_tab_index_for_shortcut('i'), Some(2));
+        assert_eq!(detail_tab_index_for_shortcut('C'), Some(3));
         assert_eq!(detail_tab_index_for_shortcut('x'), None);
     }
 
@@ -1257,6 +1328,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("[S]ummary")));
         assert!(lines.iter().any(|line| line.contains("[L]atency")));
         assert!(lines.iter().any(|line| line.contains("[I]nfo Raw")));
+        assert!(lines.iter().any(|line| line.contains("[C]ommandstats")));
 
         let line_index = lines
             .iter()
@@ -1274,6 +1346,58 @@ mod tests {
             buffer.content()[latency_idx]
                 .modifier
                 .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn detail_commandstats_tab_renders_sorted_table() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 3;
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.commandstats = vec![
+            CommandStat {
+                command: "echo".into(),
+                calls: 2_057,
+                usec: 49_361_425,
+                usec_per_call: 23_996.80,
+            },
+            CommandStat {
+                command: "lrange".into(),
+                calls: 400_000,
+                usec: 6_420_146,
+                usec_per_call: 16.05,
+            },
+        ];
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 16);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("Commandstats")));
+        assert!(lines.iter().any(|line| line.contains("Command")));
+        assert!(lines.iter().any(|line| line.contains("Usec/Call")));
+
+        let lrange_row = lines
+            .iter()
+            .position(|line| line.contains("lrange"))
+            .expect("lrange row rendered");
+        let echo_row = lines
+            .iter()
+            .position(|line| line.contains("echo"))
+            .expect("echo row rendered");
+        assert!(
+            lrange_row < echo_row,
+            "rows should be sorted by calls descending"
         );
     }
 

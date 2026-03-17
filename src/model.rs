@@ -195,7 +195,16 @@ pub struct DetailMetrics {
     pub master_host: Option<String>,
     pub master_port: Option<u16>,
     pub cluster_enabled: bool,
+    pub commandstats: Vec<CommandStat>,
     pub raw_info: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandStat {
+    pub command: String,
+    pub calls: u64,
+    pub usec: u64,
+    pub usec_per_call: f64,
 }
 
 #[derive(Debug, Clone)]

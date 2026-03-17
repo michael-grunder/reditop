@@ -6,7 +6,7 @@ use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, Status, Target, TargetProtocol};
-use crate::parse::{ClusterShard, parse_cluster_shards, parse_info};
+use crate::parse::{ClusterShard, parse_cluster_shards, parse_commandstats, parse_info};
 use crate::target_addr::{canonical_host, strip_host};
 
 pub fn start(
@@ -153,6 +153,7 @@ fn apply_info_to_state(state: &mut InstanceState, info_raw: &str) {
         .get("replication", "master_port")
         .and_then(|v| v.parse::<u16>().ok());
     state.detail.cluster_enabled = info.get_bool_01("cluster", "cluster_enabled");
+    state.detail.commandstats = parse_commandstats(&info);
     state.detail.raw_info = Some(info_raw.to_string());
 
     if state.detail.cluster_enabled {
