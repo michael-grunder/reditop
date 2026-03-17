@@ -20,6 +20,26 @@ use crate::column::{Align, EmphasisStyle};
 use crate::poller;
 use crate::registry::ColumnRegistry;
 
+struct DetailTabSpec {
+    title: &'static str,
+    shortcut: char,
+}
+
+const DETAIL_TABS: [DetailTabSpec; 3] = [
+    DetailTabSpec {
+        title: "Summary",
+        shortcut: 's',
+    },
+    DetailTabSpec {
+        title: "Latency",
+        shortcut: 'l',
+    },
+    DetailTabSpec {
+        title: "Info Raw",
+        shortcut: 'i',
+    },
+];
+
 pub fn run(launch: LaunchConfig) -> Result<()> {
     if launch.verbose {
         eprintln!(
@@ -146,10 +166,15 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Help => app.close_help_view(),
                 KeyCode::Tab | KeyCode::Right if app.active_view == ActiveView::Detail => {
-                    app.detail_tab = (app.detail_tab + 1) % 3;
+                    app.detail_tab = (app.detail_tab + 1) % DETAIL_TABS.len();
                 }
                 KeyCode::Left if app.active_view == ActiveView::Detail => {
-                    app.detail_tab = (app.detail_tab + 2) % 3;
+                    app.detail_tab = (app.detail_tab + DETAIL_TABS.len() - 1) % DETAIL_TABS.len();
+                }
+                KeyCode::Char(ch) if app.active_view == ActiveView::Detail => {
+                    if let Some(index) = detail_tab_index_for_shortcut(ch) {
+                        app.detail_tab = index;
+                    }
                 }
                 _ => {}
             }
@@ -583,21 +608,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         chunks[0],
     );
 
-    let tabs = Tabs::new(vec!["Summary", "Latency", "Info Raw"])
-        .style(base_style(app))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(base_style(app)),
-        )
-        .select(app.detail_tab)
-        .highlight_style(
-            Style::default()
-                .fg(carat_color(app))
-                .bg(background_color(app))
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(tabs, chunks[1]);
+    frame.render_widget(detail_tabs_widget(app), chunks[1]);
 
     match app.detail_tab {
         0 => {
@@ -712,6 +723,47 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     }
 }
 
+fn detail_tab_index_for_shortcut(ch: char) -> Option<usize> {
+    let shortcut = ch.to_ascii_lowercase();
+    DETAIL_TABS.iter().position(|tab| tab.shortcut == shortcut)
+}
+
+fn detail_tabs_widget(app: &AppState) -> Tabs<'static> {
+    Tabs::new(DETAIL_TABS.iter().map(detail_tab_label))
+        .style(base_style(app))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(base_style(app)),
+        )
+        .divider("│")
+        .select(app.detail_tab)
+        .highlight_style(
+            Style::default()
+                .fg(background_color(app))
+                .bg(carat_color(app))
+                .add_modifier(Modifier::BOLD),
+        )
+}
+
+fn detail_tab_label(tab: &DetailTabSpec) -> Line<'static> {
+    let shortcut = tab.shortcut.to_ascii_uppercase().to_string();
+    let title = tab.title.to_string();
+    let first = title
+        .chars()
+        .next()
+        .map(|ch| ch.to_ascii_uppercase().to_string())
+        .unwrap_or_default();
+    let remainder = title.chars().skip(1).collect::<String>();
+    let suffix = if first == shortcut { remainder } else { title };
+
+    Line::from(vec![
+        Span::raw("["),
+        Span::styled(shortcut, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!("]{suffix}")),
+    ])
+}
+
 fn format_aligned_rows(rows: &[(&str, String)]) -> String {
     let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
     rows.iter()
@@ -800,6 +852,10 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ("Enter", "Open detail view from overview"),
         ("Tab/Right", "Next detail panel"),
         ("Left", "Previous detail panel"),
+        (
+            "S / L / I",
+            "Jump to Summary, Latency, or Info Raw in detail",
+        ),
         ("Up/Down", "Move selection in overview"),
         ("?", "Toggle help overlay"),
         ("r", "Refresh now"),
@@ -832,7 +888,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I jump to detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -954,7 +1010,8 @@ mod tests {
     };
 
     use super::{
-        Align, cluster_color_for_token, compute_column_widths, draw, fit_cell_text,
+        Align, background_color, carat_color, cluster_color_for_token, compute_column_widths,
+        detail_tab_index_for_shortcut, detail_tabs_widget, draw, fit_cell_text,
         format_aligned_rows, format_with_commas, help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
@@ -1006,6 +1063,14 @@ mod tests {
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F4"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F5"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F6"));
+    }
+
+    #[test]
+    fn detail_tab_shortcuts_match_expected_tabs_case_insensitively() {
+        assert_eq!(detail_tab_index_for_shortcut('s'), Some(0));
+        assert_eq!(detail_tab_index_for_shortcut('L'), Some(1));
+        assert_eq!(detail_tab_index_for_shortcut('i'), Some(2));
+        assert_eq!(detail_tab_index_for_shortcut('x'), None);
     }
 
     #[test]
@@ -1148,7 +1213,7 @@ mod tests {
         app.apply_update(b);
         app.selected_index = 1;
 
-        let backend = TestBackend::new(100, 12);
+        let backend = TestBackend::new(100, 16);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
             .draw(|frame| draw(frame, &app))
@@ -1170,6 +1235,45 @@ mod tests {
             buffer.content()[gutter_idx].fg,
             cluster_color_for_token("2"),
             "gutter color should be derived from the logical cluster label"
+        );
+    }
+
+    #[test]
+    fn detail_tabs_render_shortcuts_and_highlight_selected_tab() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.detail_tab = 1;
+
+        let backend = TestBackend::new(100, 3);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| frame.render_widget(detail_tabs_widget(&app), frame.area()))
+            .expect("tab draw succeeds");
+
+        let buffer = terminal.backend().buffer().clone();
+        let lines = buffer_lines(&buffer);
+        assert!(lines.iter().any(|line| line.contains("[S]ummary")));
+        assert!(lines.iter().any(|line| line.contains("[L]atency")));
+        assert!(lines.iter().any(|line| line.contains("[I]nfo Raw")));
+
+        let line_index = lines
+            .iter()
+            .position(|line| line.contains("[L]atency"))
+            .expect("latency tab rendered");
+        let tab_row = &lines[line_index];
+        let width = usize::from(buffer.area.width);
+        let latency_col = char_column(tab_row, "[L]atency");
+        let latency_idx = line_index * width + latency_col;
+
+        assert_eq!(buffer.content()[latency_idx].symbol(), "[");
+        assert_eq!(buffer.content()[latency_idx].fg, background_color(&app));
+        assert_eq!(buffer.content()[latency_idx].bg, carat_color(&app));
+        assert!(
+            buffer.content()[latency_idx]
+                .modifier
+                .contains(Modifier::BOLD)
         );
     }
 

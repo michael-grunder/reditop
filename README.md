@@ -29,6 +29,7 @@
 - `Enter`: open detail
 - `Esc`: back to previous view (or stop filter editing)
 - `Tab` / `Left` / `Right`: cycle detail tabs
+- `S` / `L` / `I`: jump to `Summary` / `Latency` / `Info Raw` in detail view
 - `t`: toggle tree/flat
 - `s`: cycle sort column
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
