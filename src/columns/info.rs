@@ -93,20 +93,15 @@ impl Column for RedisInfoFieldColumn {
     fn sort_key(&self, ctx: &SortCtx<'_>) -> SortKey {
         match self.value_type {
             ValueType::String => parse_string(ctx.snap, &self.info_key)
-                .map(|v| SortKey::Str(v.to_ascii_lowercase()))
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, |v| SortKey::Str(v.to_ascii_lowercase())),
             ValueType::U64 | ValueType::Bytes => parse_u64(ctx.snap, &self.info_key)
-                .map(SortKey::U64)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::U64),
             ValueType::I64 => parse_i64(ctx.snap, &self.info_key)
-                .map(SortKey::I64)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::I64),
             ValueType::F64 | ValueType::Percent => parse_f64(ctx.snap, &self.info_key)
-                .map(SortKey::F64)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::F64),
             ValueType::Bool => parse_bool(ctx.snap, &self.info_key)
-                .map(SortKey::Bool)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::Bool),
         }
     }
 }

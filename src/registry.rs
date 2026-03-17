@@ -321,7 +321,7 @@ fn parse_calc_kind(raw: &str) -> Result<CalcKind> {
     }
 }
 
-fn default_align_for_value_type(value_type: ValueType) -> Align {
+const fn default_align_for_value_type(value_type: ValueType) -> Align {
     match value_type {
         ValueType::String => Align::Left,
         ValueType::Bool => Align::Center,
@@ -333,7 +333,7 @@ fn default_align_for_value_type(value_type: ValueType) -> Align {
     }
 }
 
-fn default_align_for_calc(kind: &CalcKind) -> Align {
+const fn default_align_for_calc(kind: &CalcKind) -> Align {
     match kind {
         CalcKind::Addr
         | CalcKind::Alias
@@ -359,7 +359,7 @@ fn default_visible_columns() -> Vec<String> {
     ]
 }
 
-pub fn legacy_sort_key(mode: SortMode) -> &'static str {
+pub const fn legacy_sort_key(mode: SortMode) -> &'static str {
     match mode {
         SortMode::Alias => "alias",
         SortMode::Address => "addr",
@@ -373,7 +373,7 @@ pub fn legacy_sort_key(mode: SortMode) -> &'static str {
     }
 }
 
-pub fn legacy_sort_direction(mode: SortMode) -> SortDirection {
+pub const fn legacy_sort_direction(mode: SortMode) -> SortDirection {
     match mode {
         SortMode::Alias
         | SortMode::Address

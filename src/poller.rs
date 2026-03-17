@@ -163,7 +163,7 @@ fn apply_info_to_state(state: &mut InstanceState, info_raw: &str) {
                 state.kind = InstanceType::Primary;
                 state.parent_addr = None;
             }
-            Some("slave") | Some("replica") => {
+            Some("slave" | "replica") => {
                 state.kind = InstanceType::Replica;
                 state.parent_addr = match (&state.detail.master_host, state.detail.master_port) {
                     (Some(host), Some(port)) => Some(format!("{host}:{port}")),

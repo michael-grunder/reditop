@@ -20,8 +20,7 @@ impl ParsedInfo {
 
     pub fn get_bool_01(&self, section: &str, key: &str) -> bool {
         self.get(section, key)
-            .map(|value| value == "1")
-            .unwrap_or(false)
+            .is_some_and(|value| value == "1")
     }
 
     pub fn flat_map(&self) -> HashMap<String, String> {
@@ -295,8 +294,7 @@ fn strip_port_suffix(host: &str) -> Option<&str> {
         let (addr, suffix) = inner.split_once(']')?;
         if suffix
             .strip_prefix(':')
-            .map(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
-            .unwrap_or(false)
+            .is_some_and(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
         {
             return Some(addr);
         }

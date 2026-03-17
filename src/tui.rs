@@ -45,7 +45,7 @@ async fn run_loop(
         launch.settings.default_sort,
     );
     let mut app = AppState::new(launch.settings.clone(), registry);
-    let (mut updates_rx, refresh_tx) = poller::start(launch.targets, launch.settings.clone());
+    let (mut updates_rx, refresh_tx) = poller::start(launch.targets, launch.settings);
 
     loop {
         while let Ok(update) = updates_rx.try_recv() {
@@ -145,7 +145,7 @@ async fn run_loop(
                     }
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
-                    app.active_view = ActiveView::Overview
+                    app.active_view = ActiveView::Overview;
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Help => app.close_help_view(),
                 KeyCode::Tab | KeyCode::Right if app.active_view == ActiveView::Detail => {
@@ -261,8 +261,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             .map(|((column, key), width)| {
                 let label = sortable_header(column.header(), app, key);
                 Cell::from(fit_cell_text(&label, *width as usize, column.align()))
-            })
-            .collect::<Vec<Cell<'_>>>(),
+            }),
     )
     .style(base_style(app).add_modifier(Modifier::BOLD));
 
@@ -416,9 +415,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             .unwrap_or_else(|| "-".to_string()),
         instance
             .detail
-            .uptime_seconds
-            .map(format_with_commas)
-            .unwrap_or_else(|| "-".to_string())
+            .uptime_seconds.map_or_else(|| "-".to_string(), format_with_commas)
     );
     frame.render_widget(
         Paragraph::new(title).style(base_style(app)).block(
@@ -517,9 +514,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 (
                     "last_latency_ms",
                     instance
-                        .last_latency_ms
-                        .map(|v| format!("{v:.2}"))
-                        .unwrap_or_else(|| "-".to_string()),
+                        .last_latency_ms.map_or_else(|| "-".to_string(), |v| format!("{v:.2}")),
                 ),
                 ("max_latency_ms", format!("{:.2}", instance.max_latency_ms)),
                 ("avg_latency_ms", format!("{:.2}", instance.avg_latency_ms)),
@@ -563,21 +558,17 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 fn format_aligned_rows(rows: &[(&str, String)]) -> String {
     let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
     rows.iter()
-        .map(|(label, value)| format!("{label:width$} : {value}", width = width))
+        .map(|(label, value)| format!("{label:width$} : {value}"))
         .collect::<Vec<String>>()
         .join("\n")
 }
 
 fn format_optional_u64(value: Option<u64>) -> String {
-    value
-        .map(format_with_commas)
-        .unwrap_or_else(|| "-".to_string())
+    value.map_or_else(|| "-".to_string(), format_with_commas)
 }
 
 fn format_optional_bytes(value: Option<u64>) -> String {
-    value
-        .map(|bytes| format!("{} ({})", format_with_commas(bytes), human_bytes(bytes)))
-        .unwrap_or_else(|| "-".to_string())
+    value.map_or_else(|| "-".to_string(), |bytes| format!("{} ({})", format_with_commas(bytes), human_bytes(bytes)))
 }
 
 fn format_with_commas(value: u64) -> String {
@@ -652,7 +643,7 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     );
 }
 
-fn help_bindings() -> &'static [(&'static str, &'static str)] {
+const fn help_bindings() -> &'static [(&'static str, &'static str)] {
     &[
         ("q", "Quit"),
         ("F1", "Open full help page"),
@@ -708,7 +699,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     );
 }
 
-fn sort_direction_symbol(direction: crate::model::SortDirection) -> &'static str {
+const fn sort_direction_symbol(direction: crate::model::SortDirection) -> &'static str {
     match direction {
         crate::model::SortDirection::Asc => "↑",
         crate::model::SortDirection::Desc => "↓",
@@ -743,9 +734,7 @@ fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) 
             };
             let label = app
                 .column_registry
-                .column(column_key)
-                .map(|column| column.header().to_string())
-                .unwrap_or_else(|| column_key.clone());
+                .column(column_key).map_or_else(|| column_key.clone(), |column| column.header().to_string());
             Row::new(vec![Cell::from(format!("{label}{direction}"))])
         })
         .collect();

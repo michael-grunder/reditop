@@ -103,13 +103,11 @@ impl CalcColumn {
             CalcKind::Role => SortKey::Str(compact_role(snap).to_string()),
             CalcKind::Cluster => ctx
                 .cluster_label
-                .map(|value| SortKey::Str(value.to_string()))
-                .unwrap_or(SortKey::Null),
-            CalcKind::Status => SortKey::U64(snap.status.severity() as u64),
+                .map_or(SortKey::Null, |value| SortKey::Str(value.to_string())),
+            CalcKind::Status => SortKey::U64(u64::from(snap.status.severity())),
             CalcKind::LatencyLastMs => snap
                 .last_latency_ms
-                .map(SortKey::F64)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::F64),
             CalcKind::LatencyMaxMs => SortKey::F64(snap.max_latency_ms),
             CalcKind::MaxmemoryPercent { used_key, max_key } => {
                 let used = parse_u64(snap, used_key).or(snap.used_memory_bytes);
@@ -138,12 +136,10 @@ impl CalcColumn {
             }
             CalcKind::ClientsTotal { key } => parse_u64(snap, key)
                 .or(snap.detail.connected_clients)
-                .map(SortKey::U64)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::U64),
             CalcKind::OpsPerSec { key } => parse_u64(snap, key)
                 .or(snap.ops_per_sec)
-                .map(SortKey::U64)
-                .unwrap_or(SortKey::Null),
+                .map_or(SortKey::Null, SortKey::U64),
         }
     }
 

@@ -46,7 +46,7 @@ impl SortKey {
     }
 }
 
-fn variant_rank(key: &SortKey) -> u8 {
+const fn variant_rank(key: &SortKey) -> u8 {
     match key {
         SortKey::Null => 0,
         SortKey::Bool(_) => 1,
@@ -63,7 +63,7 @@ pub struct CellText {
 }
 
 impl CellText {
-    pub fn plain(text: String) -> Self {
+    pub const fn plain(text: String) -> Self {
         Self { text }
     }
 }
@@ -100,7 +100,7 @@ pub enum ValueType {
     Bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormatSpec {
     Raw,
     BytesHuman,
@@ -157,7 +157,7 @@ pub fn format_millis(value: f64, decimals: u8) -> String {
     format!("{:.*}", decimals as usize, value)
 }
 
-pub fn compact_role(snap: &InstanceState) -> &'static str {
+pub const fn compact_role(snap: &InstanceState) -> &'static str {
     match snap.kind {
         crate::model::InstanceType::Standalone => "STD",
         crate::model::InstanceType::Cluster => "CLU",

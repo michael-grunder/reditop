@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::nursery, clippy::pedantic)]
+
 mod app;
 mod cli;
 mod cluster;

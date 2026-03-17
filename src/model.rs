@@ -11,7 +11,7 @@ pub enum ViewMode {
 }
 
 impl ViewMode {
-    pub fn toggle(self) -> Self {
+    pub const fn toggle(self) -> Self {
         match self {
             Self::Flat => Self::Tree,
             Self::Tree => Self::Flat,
@@ -41,7 +41,7 @@ pub enum SortDirection {
 }
 
 impl SortDirection {
-    pub fn toggle(self) -> Self {
+    pub const fn toggle(self) -> Self {
         match self {
             Self::Asc => Self::Desc,
             Self::Desc => Self::Asc,
@@ -90,7 +90,7 @@ pub enum UiColor {
 }
 
 impl UiColor {
-    pub fn to_ratatui_color(self) -> Color {
+    pub const fn to_ratatui_color(self) -> Color {
         match self {
             Self::Black => Color::Black,
             Self::Red => Color::Red,
@@ -135,7 +135,7 @@ pub enum InstanceType {
 }
 
 impl InstanceType {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Standalone => "standalone",
             Self::Cluster => "cluster",
@@ -156,7 +156,7 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "OK",
             Self::AuthFail => "AUTHFAIL",
@@ -167,7 +167,7 @@ impl Status {
         }
     }
 
-    pub fn severity(self) -> u8 {
+    pub const fn severity(self) -> u8 {
         match self {
             Self::Down => 0,
             Self::AuthFail => 1,
@@ -248,8 +248,7 @@ impl InstanceState {
 
     pub fn is_stale(&self, refresh_interval: Duration) -> bool {
         self.last_updated
-            .map(|ts| ts.elapsed() > refresh_interval.saturating_mul(2))
-            .unwrap_or(true)
+            .map_or(true, |ts| ts.elapsed() > refresh_interval.saturating_mul(2))
     }
 
     pub fn push_latency_sample(&mut self, sample_ms: f64) {

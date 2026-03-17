@@ -21,7 +21,7 @@ pub enum FilterPromptMode {
 }
 
 impl FilterPromptMode {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Search => "Search",
             Self::Filter => "Filter",
@@ -126,7 +126,7 @@ impl AppState {
         self.active_view = ActiveView::Help;
     }
 
-    pub fn close_help_view(&mut self) {
+    pub const fn close_help_view(&mut self) {
         self.active_view = self.previous_view;
     }
 
@@ -173,7 +173,7 @@ impl AppState {
         !self.should_omit_host_in_rendering()
     }
 
-    pub fn toggle_host_rendering(&mut self) {
+    pub const fn toggle_host_rendering(&mut self) {
         self.force_show_host = !self.force_show_host;
     }
 
@@ -183,9 +183,7 @@ impl AppState {
 
     pub fn sort_label(&self) -> String {
         self.column_registry
-            .column(&self.sort_by)
-            .map(|column| column.header().to_string())
-            .unwrap_or_else(|| self.sort_by.clone())
+            .column(&self.sort_by).map_or_else(|| self.sort_by.clone(), |column| column.header().to_string())
     }
 
     pub fn open_sort_picker(&mut self) {
@@ -197,7 +195,7 @@ impl AppState {
         self.is_sorting = true;
     }
 
-    pub fn close_sort_picker(&mut self) {
+    pub const fn close_sort_picker(&mut self) {
         self.is_sorting = false;
     }
 
@@ -381,14 +379,12 @@ impl AppState {
         let needle = self.filter.to_ascii_lowercase();
         node.alias
             .as_deref()
-            .map(|s| s.to_ascii_lowercase().contains(&needle))
-            .unwrap_or(false)
+            .is_some_and(|s| s.to_ascii_lowercase().contains(&needle))
             || node.addr.to_ascii_lowercase().contains(&needle)
             || node
                 .cluster_id
                 .as_deref()
-                .map(|s| s.to_ascii_lowercase().contains(&needle))
-                .unwrap_or(false)
+                .is_some_and(|s| s.to_ascii_lowercase().contains(&needle))
             || node
                 .tags
                 .iter()
@@ -510,7 +506,7 @@ fn sort_tree_roots(
     });
 }
 
-fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
+const fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
     match direction {
         SortDirection::Asc => ordering,
         SortDirection::Desc => ordering.reverse(),
@@ -524,7 +520,7 @@ fn default_sort_direction_for_column(column_key: &str) -> SortDirection {
     }
 }
 
-fn root_kind_rank(kind: InstanceType) -> u8 {
+const fn root_kind_rank(kind: InstanceType) -> u8 {
     match kind {
         InstanceType::Primary => 0,
         InstanceType::Cluster => 1,
