@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+### Changed
+- Right-align the numeric `Commandstats` columns and headers so call and timing values stay justified in the detail table.
+
 ### Fixed
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
@@ -32,7 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added configurable overview emphasis styling via `[view.overview.emphasis_style]` plus per-column overrides under `[columns.<key>.emphasis_style]`.
 - Added INFO flat key map snapshots on each instance update to support generic INFO column extraction.
 - Added configurable TUI theme settings via `[theme]` (`background_color`, `foreground_color`, `carat_color`, `warning_color`, `critical_color`).
-### Changed
 - Detail tabs now render mnemonic labels (`[S]ummary`, `[L]atency`, `[I]nfo Raw`, `[C]ommandstats`), highlight the active tab more strongly, and support direct keyboard jumps with `S`, `L`, `I`, and `C`.
 - Replaced the default overview `Cluster` column with a compact color gutter between the selection carat and `Alias`, grouping rows by logical cluster or replication set while keeping cluster sort support available.
 - Expanded data model to include runtime settings, instance metrics, detail fields, and rolling latency aggregates.

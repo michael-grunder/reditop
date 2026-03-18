@@ -785,9 +785,9 @@ fn draw_commandstats(
         .map(|stat| {
             Row::new(vec![
                 Cell::from(stat.command.clone()),
-                Cell::from(format!("{:>14}", format_with_commas(stat.calls))),
-                Cell::from(format!("{:>14}", format_with_commas(stat.usec))),
-                Cell::from(format!("{:>15.2}", stat.usec_per_call)),
+                Cell::from(Line::from(format_with_commas(stat.calls)).right_aligned()),
+                Cell::from(Line::from(format_with_commas(stat.usec)).right_aligned()),
+                Cell::from(Line::from(format!("{:.2}", stat.usec_per_call)).right_aligned()),
             ])
         })
         .collect();
@@ -801,8 +801,13 @@ fn draw_commandstats(
         ],
     )
     .header(
-        Row::new(vec!["Command", "Calls", "Usec", "Usec/Call"])
-            .style(base_style(app).add_modifier(Modifier::BOLD)),
+        Row::new(vec![
+            Cell::from("Command"),
+            Cell::from(Line::from("Calls").right_aligned()),
+            Cell::from(Line::from("Usec").right_aligned()),
+            Cell::from(Line::from("Usec/Call").right_aligned()),
+        ])
+        .style(base_style(app).add_modifier(Modifier::BOLD)),
     )
     .block(
         Block::default()
