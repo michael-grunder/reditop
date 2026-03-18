@@ -82,7 +82,15 @@ reditop --version
 # reditop x.y.z [YYYY-MM-DD] (<gitsha>[-dirty])
 ```
 
-## Building a static musl binary
+## Building release binaries
+
+CI builds upload release artifacts for:
+
+- `aarch64-apple-darwin`
+- `x86_64-unknown-linux-musl`
+- `aarch64-unknown-linux-musl`
+
+### Linux static musl binary
 
 Install the musl target once:
 
@@ -100,6 +108,20 @@ Output binary:
 
 ```bash
 target/x86_64-unknown-linux-musl/release/reditop
+```
+
+### macOS Apple Silicon binary
+
+On an Apple Silicon macOS host, build the native release binary with:
+
+```bash
+cargo build --release --target aarch64-apple-darwin
+```
+
+Output binary:
+
+```bash
+target/aarch64-apple-darwin/release/reditop
 ```
 
 ## Config
