@@ -387,6 +387,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_commandstats_for_subcommands_with_pipe_delimiters() {
+        let info = "# Commandstats\ncmdstat_cluster|set-config-epoch:calls=1,usec=72,usec_per_call=72.00,rejected_calls=0,failed_calls=0\ncmdstat_cluster|shards:calls=863,usec=89825,usec_per_call=104.08,rejected_calls=0,failed_calls=0\n";
+        let parsed = parse_info(info);
+        let stats = parse_commandstats(&parsed);
+
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].command, "cluster|shards");
+        assert_eq!(stats[0].calls, 863);
+        assert_eq!(stats[1].command, "cluster|set-config-epoch");
+        assert_eq!(stats[1].usec, 72);
+    }
+
+    #[test]
     fn parses_cluster_shards_from_resp2_array_shape() {
         let response = Value::Array(vec![Value::Array(vec![
             Value::BulkString(b"slots".to_vec()),

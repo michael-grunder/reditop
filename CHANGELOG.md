@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
 - Overview emphasis styling is no longer hard-wired to underline, and can now be configured from TOML without changing the winner-selection rule.
+- Detail `Commandstats` now fetches `INFO COMMANDSTATS` explicitly, so instances that omit that section from plain `INFO` still populate the tab correctly.
 
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.

@@ -109,7 +109,13 @@ async fn poll_one(
         }
     };
 
-    apply_info_to_state(&mut state, &info);
+    let commandstats_info = redis::cmd("INFO")
+        .arg("COMMANDSTATS")
+        .query_async::<String>(&mut conn)
+        .await
+        .ok();
+
+    apply_info_to_state(&mut state, &info, commandstats_info.as_deref());
 
     if state.detail.cluster_enabled
         && let Ok(shards) = redis::cmd("CLUSTER")
@@ -129,7 +135,7 @@ async fn poll_one(
     state
 }
 
-fn apply_info_to_state(state: &mut InstanceState, info_raw: &str) {
+fn apply_info_to_state(state: &mut InstanceState, info_raw: &str, commandstats_raw: Option<&str>) {
     let info = parse_info(info_raw);
     state.info = info.flat_map();
 
@@ -153,7 +159,11 @@ fn apply_info_to_state(state: &mut InstanceState, info_raw: &str) {
         .get("replication", "master_port")
         .and_then(|v| v.parse::<u16>().ok());
     state.detail.cluster_enabled = info.get_bool_01("cluster", "cluster_enabled");
-    state.detail.commandstats = parse_commandstats(&info);
+    state.detail.commandstats = commandstats_raw
+        .map(parse_info)
+        .map(|parsed| parse_commandstats(&parsed))
+        .filter(|stats| !stats.is_empty())
+        .unwrap_or_else(|| parse_commandstats(&info));
     state.detail.raw_info = Some(info_raw.to_string());
 
     if state.detail.cluster_enabled {
