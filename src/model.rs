@@ -196,6 +196,7 @@ pub struct DetailMetrics {
     pub master_port: Option<u16>,
     pub cluster_enabled: bool,
     pub commandstats: Vec<CommandStat>,
+    pub bigkeys: BigkeysMetrics,
     pub raw_info: Option<String>,
 }
 
@@ -205,6 +206,43 @@ pub struct CommandStat {
     pub calls: u64,
     pub usec: u64,
     pub usec_per_call: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BigkeysScanStatus {
+    #[default]
+    Idle,
+    Running,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BigkeyEntry {
+    pub key: String,
+    pub key_type: String,
+    pub size: Option<u64>,
+    pub memory_usage: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BigkeyTypeSummary {
+    pub key_type: String,
+    pub count: u64,
+    pub biggest_key: Option<String>,
+    pub biggest_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BigkeysMetrics {
+    pub status: BigkeysScanStatus,
+    pub last_error: Option<String>,
+    pub scanned_keys: u64,
+    pub memory_usage_checked: bool,
+    pub memory_usage_supported: bool,
+    pub largest_keys: Vec<BigkeyEntry>,
+    pub type_summaries: Vec<BigkeyTypeSummary>,
+    pub last_completed: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]

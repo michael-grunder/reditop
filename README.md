@@ -8,7 +8,7 @@
 - Overview screen with:
   - generic, configurable columns (INFO-backed + calculated)
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
-- Detail screen with summary, latency, raw `INFO`, and `INFO COMMANDSTATS`
+- Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, and an on-demand `bigkeys` view
 - Tree and flat overview modes
 - Sorting by currently visible column keys and substring filtering
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
@@ -25,16 +25,23 @@
 - `F6`: open sort picker from currently visible overview columns
 - `H`: open full help page
 - `?`: toggle help
-- `Up/Down`: move selection in overview, or scroll/paginate `Commandstats` in detail view
+- `Up/Down`: move selection in overview, or scroll/paginate `Commandstats` and `Bigkeys` in detail view
 - `Enter`: open detail
 - `Esc`: back to previous view (or stop filter editing)
 - `Tab` / `Left` / `Right`: cycle detail tabs
-- `S` / `L` / `I` / `C`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` in detail view
+- `S` / `L` / `I` / `C` / `B`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` in detail view
 - `t`: toggle tree/flat
 - `s`: cycle sort column
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
 - `/`: start filter input in overview, or filter `Commandstats` rows in detail view
-- `r`: refresh now
+- `r`: refresh now, or rerun the on-demand `Bigkeys` scan while that tab is open
+
+The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace with
+`SCAN`, fetches each key's type, runs the matching cardinality/length command
+(`STRLEN`, `LLEN`, `SCARD`, `ZCARD`, `HLEN`, `XLEN`), and shows the largest keys
+found. When the target supports `MEMORY USAGE`, that byte estimate is fetched and
+displayed alongside the logical size. Unlike normal polling, this scan is
+performed on demand when the `Bigkeys` tab is opened or refreshed.
 
 ## CLI
 

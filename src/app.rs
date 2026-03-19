@@ -43,6 +43,11 @@ pub struct CommandstatsViewState {
     pub scroll_offset: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BigkeysViewState {
+    pub scroll_offset: usize,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppState {
     pub settings: RuntimeSettings,
@@ -60,6 +65,7 @@ pub struct AppState {
     pub selected_index: usize,
     pub detail_tab: usize,
     pub commandstats_view: CommandstatsViewState,
+    pub bigkeys_view: BigkeysViewState,
     pub force_show_host: bool,
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
@@ -90,6 +96,7 @@ impl AppState {
             selected_index: 0,
             detail_tab: 0,
             commandstats_view: CommandstatsViewState::default(),
+            bigkeys_view: BigkeysViewState::default(),
             force_show_host: false,
             instances: HashMap::new(),
             should_quit: false,
@@ -201,6 +208,21 @@ impl AppState {
         let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
         let next = (current + delta).clamp(0, max_index);
         self.commandstats_view.scroll_offset = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub fn clamp_bigkeys_scroll(&mut self, rows_len: usize, page_len: usize) {
+        let max_offset = rows_len.saturating_sub(page_len.max(1));
+        if self.bigkeys_view.scroll_offset > max_offset {
+            self.bigkeys_view.scroll_offset = max_offset;
+        }
+    }
+
+    pub fn move_bigkeys_scroll(&mut self, delta: isize, rows_len: usize, page_len: usize) {
+        let max_offset = rows_len.saturating_sub(page_len.max(1));
+        let current = isize::try_from(self.bigkeys_view.scroll_offset).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
+        let next = (current + delta).clamp(0, max_index);
+        self.bigkeys_view.scroll_offset = usize::try_from(next).unwrap_or(0);
     }
 
     pub fn visible_rows(&self) -> Vec<DisplayRow> {
