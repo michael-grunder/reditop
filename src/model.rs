@@ -226,22 +226,10 @@ pub struct BigkeyEntry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BigkeyTypeSummary {
-    pub key_type: String,
-    pub count: u64,
-    pub biggest_key: Option<String>,
-    pub biggest_size: Option<u64>,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct BigkeysMetrics {
     pub status: BigkeysScanStatus,
     pub last_error: Option<String>,
-    pub scanned_keys: u64,
-    pub memory_usage_checked: bool,
-    pub memory_usage_supported: bool,
     pub largest_keys: Vec<BigkeyEntry>,
-    pub type_summaries: Vec<BigkeyTypeSummary>,
     pub last_completed: Option<Instant>,
 }
 

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Right-align the numeric `Commandstats` columns and headers so call and timing values stay justified in the detail table.
 - `Commandstats` detail view now supports arrow-key paging/scrolling for instances with more commands than fit on screen.
+- Simplified the `Bigkeys` detail view to a single panel: scan progress now appears in the header, completed scans show an age in seconds, and both `r` and `R` rerun the scan from that tab.
 
 ### Fixed
 - Updated Redis connection timeout configuration and I/O error classification for compatibility with newer `redis` crate releases.
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
 - Overview emphasis styling is no longer hard-wired to underline, and can now be configured from TOML without changing the winner-selection rule.
 - Detail `Commandstats` now fetches `INFO COMMANDSTATS` explicitly, so instances that omit that section from plain `INFO` still populate the tab correctly.
+- `Bigkeys` scans now enable `READONLY` on cluster replica connections so on-demand scans work against discovered cluster replicas instead of failing on redirected reads.
 
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.

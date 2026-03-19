@@ -184,7 +184,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                     app.start_commandstats_filter_input(false);
                     sync_commandstats_view(&mut app, terminal.size()?.height);
                 }
-                KeyCode::Char('r') => {
+                KeyCode::Char('r' | 'R') => {
                     let request = if is_bigkeys_detail(&app) {
                         app.selected_key().map(|key| {
                             mark_bigkeys_running(&mut app, &key);
@@ -312,10 +312,10 @@ const fn commandstats_page_len(area_height: u16) -> usize {
 }
 
 const fn bigkeys_page_len(area_height: u16) -> usize {
-    if area_height <= 12 {
+    if area_height <= 5 {
         1
     } else {
-        area_height as usize - 12
+        area_height as usize - 5
     }
 }
 
@@ -1003,23 +1003,7 @@ fn draw_bigkeys(
     area: Rect,
     bigkeys: &crate::model::BigkeysMetrics,
 ) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(5)])
-        .split(area);
-
-    frame.render_widget(
-        Paragraph::new(bigkeys_summary_text(bigkeys))
-            .style(base_style(app))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Bigkeys Summary")
-                    .style(base_style(app)),
-            )
-            .wrap(Wrap { trim: false }),
-        chunks[0],
-    );
+    let block = bigkeys_block(app, bigkeys, 0, bigkeys.largest_keys.len());
 
     if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running)
         && bigkeys.largest_keys.is_empty()
@@ -1027,13 +1011,8 @@ fn draw_bigkeys(
         frame.render_widget(
             Paragraph::new("Scanning keyspace for big keys...")
                 .style(base_style(app))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Bigkeys")
-                        .style(base_style(app)),
-                ),
-            chunks[1],
+                .block(block),
+            area,
         );
         return;
     }
@@ -1044,14 +1023,9 @@ fn draw_bigkeys(
         frame.render_widget(
             Paragraph::new(error.clone())
                 .style(base_style(app))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Bigkeys Error")
-                        .style(base_style(app)),
-                )
+                .block(block)
                 .wrap(Wrap { trim: false }),
-            chunks[1],
+            area,
         );
         return;
     }
@@ -1060,18 +1034,13 @@ fn draw_bigkeys(
         frame.render_widget(
             Paragraph::new("No keys found")
                 .style(base_style(app))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Bigkeys")
-                        .style(base_style(app)),
-                ),
-            chunks[1],
+                .block(block),
+            area,
         );
         return;
     }
 
-    frame.render_widget(bigkeys_table(app, area.height, bigkeys), chunks[1]);
+    frame.render_widget(bigkeys_table(app, area.height, bigkeys), area);
 }
 
 fn commandstats_title(app: &AppState, start: usize, end: usize, total: usize) -> String {
@@ -1088,20 +1057,19 @@ fn commandstats_title(app: &AppState, start: usize, end: usize, total: usize) ->
     title
 }
 
-fn bigkeys_title(
-    _app: &AppState,
-    bigkeys: &crate::model::BigkeysMetrics,
-    start: usize,
-    end: usize,
-) -> String {
-    let mut title = format!(
-        "Bigkeys {}-{} / {}",
-        start + 1,
-        end,
-        bigkeys.largest_keys.len()
-    );
+fn bigkeys_title(bigkeys: &crate::model::BigkeysMetrics, start: usize, end: usize) -> String {
+    let mut title = if bigkeys.largest_keys.is_empty() {
+        "Bigkeys".to_string()
+    } else {
+        format!(
+            "Bigkeys {}-{} / {}",
+            start + 1,
+            end,
+            bigkeys.largest_keys.len()
+        )
+    };
     if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running) {
-        let _ = write!(title, "  refreshing");
+        let _ = write!(title, "  scanning");
     }
     if let Some(error) = &bigkeys.last_error {
         let _ = write!(title, "  error={}", truncate_for_title(error, 40));
@@ -1109,58 +1077,32 @@ fn bigkeys_title(
     title
 }
 
-const fn bigkeys_status_label(bigkeys: &crate::model::BigkeysMetrics) -> &'static str {
-    match bigkeys.status {
-        crate::model::BigkeysScanStatus::Idle => "idle",
-        crate::model::BigkeysScanStatus::Running => "running",
-        crate::model::BigkeysScanStatus::Ready => "ready",
-        crate::model::BigkeysScanStatus::Failed => "failed",
+fn bigkeys_age_title(bigkeys: &crate::model::BigkeysMetrics) -> Option<Line<'static>> {
+    if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running) {
+        return None;
     }
+
+    bigkeys
+        .last_completed
+        .map(|instant| Line::from(format!("age: {}s", instant.elapsed().as_secs())).right_aligned())
 }
 
-fn bigkeys_summary_text(bigkeys: &crate::model::BigkeysMetrics) -> String {
-    let completed = bigkeys.last_completed.map_or_else(
-        || "-".to_string(),
-        |instant| format!("{} ago", humantime::format_duration(instant.elapsed())),
-    );
-    let memory_usage = if !bigkeys.memory_usage_checked {
-        "unknown".to_string()
-    } else if bigkeys.memory_usage_supported {
-        "supported".to_string()
-    } else {
-        "unsupported".to_string()
-    };
-    let top_types = if bigkeys.type_summaries.is_empty() {
-        "-".to_string()
-    } else {
-        bigkeys
-            .type_summaries
-            .iter()
-            .take(3)
-            .map(|summary| {
-                let biggest = summary
-                    .biggest_size
-                    .map_or_else(|| "-".to_string(), format_with_commas);
-                format!(
-                    "{}={} (largest {}:{})",
-                    summary.key_type,
-                    format_with_commas(summary.count),
-                    summary.biggest_key.as_deref().unwrap_or("-"),
-                    biggest
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+fn bigkeys_block(
+    app: &AppState,
+    bigkeys: &crate::model::BigkeysMetrics,
+    start: usize,
+    end: usize,
+) -> Block<'static> {
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(bigkeys_title(bigkeys, start, end))
+        .style(base_style(app));
 
-    format!(
-        "status        : {}\nscanned_keys  : {}\nmemory_usage  : {}\nlast_complete : {}\ntypes         : {}",
-        bigkeys_status_label(bigkeys),
-        format_with_commas(bigkeys.scanned_keys),
-        memory_usage,
-        completed,
-        top_types
-    )
+    if let Some(age) = bigkeys_age_title(bigkeys) {
+        block = block.title(age);
+    }
+
+    block
 }
 
 fn bigkeys_table<'a>(
@@ -1204,12 +1146,7 @@ fn bigkeys_table<'a>(
         ])
         .style(base_style(app).add_modifier(Modifier::BOLD)),
     )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(bigkeys_title(app, bigkeys, start, end))
-            .style(base_style(app)),
-    )
+    .block(bigkeys_block(app, bigkeys, start, end))
     .style(base_style(app))
     .column_spacing(1)
 }
@@ -1343,7 +1280,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "Move selection in overview or scroll Commandstats/Bigkeys",
         ),
         ("?", "Toggle help overlay"),
-        ("r", "Refresh now"),
+        ("r / R", "Refresh now, or rerun Bigkeys while on Bigkeys"),
         ("F3", "Start search input in overview"),
         (
             "F4",
@@ -1373,7 +1310,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview or Commandstats";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview or Commandstats";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1495,9 +1432,10 @@ mod tests {
     };
 
     use super::{
-        Align, background_color, carat_color, cluster_color_for_token, commandstats_page_len,
-        compute_column_widths, detail_tab_index_for_shortcut, detail_tabs_widget, draw,
-        fit_cell_text, format_aligned_rows, format_with_commas, help_bindings, is_quit_key,
+        Align, background_color, bigkeys_age_title, carat_color, cluster_color_for_token,
+        commandstats_page_len, compute_column_widths, detail_tab_index_for_shortcut,
+        detail_tabs_widget, draw, fit_cell_text, format_aligned_rows, format_with_commas,
+        help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
@@ -1902,7 +1840,7 @@ mod tests {
     }
 
     #[test]
-    fn detail_bigkeys_tab_renders_summary_and_rows() {
+    fn detail_bigkeys_tab_renders_single_panel_and_rows() {
         let mut app = crate::app::AppState::new(
             default_settings(),
             ColumnRegistry::load(None, true, crate::model::SortMode::Address),
@@ -1913,9 +1851,7 @@ mod tests {
         let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
         instance.last_updated = Some(std::time::Instant::now());
         instance.detail.bigkeys.status = BigkeysScanStatus::Ready;
-        instance.detail.bigkeys.scanned_keys = 3;
-        instance.detail.bigkeys.memory_usage_checked = true;
-        instance.detail.bigkeys.memory_usage_supported = true;
+        instance.detail.bigkeys.last_completed = Some(std::time::Instant::now());
         instance.detail.bigkeys.largest_keys = vec![
             BigkeyEntry {
                 key: "sessions".into(),
@@ -1939,15 +1875,26 @@ mod tests {
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
-        assert!(lines.iter().any(|line| line.contains("Bigkeys Summary")));
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("memory_usage  : supported"))
-        );
         assert!(lines.iter().any(|line| line.contains("Bigkeys")));
+        assert!(lines.iter().any(|line| line.contains("age: 0s")));
         assert!(lines.iter().any(|line| line.contains("sessions")));
         assert!(lines.iter().any(|line| line.contains("timeline")));
+    }
+
+    #[test]
+    fn bigkeys_age_title_hides_while_running() {
+        let mut bigkeys = crate::model::BigkeysMetrics {
+            status: BigkeysScanStatus::Running,
+            last_completed: Some(std::time::Instant::now()),
+            ..crate::model::BigkeysMetrics::default()
+        };
+        assert!(bigkeys_age_title(&bigkeys).is_none());
+
+        bigkeys.status = BigkeysScanStatus::Ready;
+        assert_eq!(
+            bigkeys_age_title(&bigkeys).map(|line| line.to_string()),
+            Some("age: 0s".to_string())
+        );
     }
 
     #[test]

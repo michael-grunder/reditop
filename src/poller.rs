@@ -6,8 +6,8 @@ use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::model::{
-    BigkeyEntry, BigkeyTypeSummary, BigkeysMetrics, BigkeysScanStatus, InstanceState, InstanceType,
-    RuntimeSettings, Status, Target, TargetProtocol,
+    BigkeyEntry, BigkeysMetrics, BigkeysScanStatus, InstanceState, InstanceType, RuntimeSettings,
+    Status, Target, TargetProtocol,
 };
 use crate::parse::{ClusterShard, parse_cluster_shards, parse_commandstats, parse_info};
 use crate::target_addr::{canonical_host, strip_host};
@@ -214,12 +214,28 @@ async fn poll_bigkeys(
         }
     };
 
+    if let Err(err) = prepare_bigkeys_connection(&mut conn, &state).await {
+        apply_bigkeys_failure(&mut state, err.to_string());
+        return state;
+    }
+
     match scan_bigkeys(&mut conn).await {
         Ok(bigkeys) => state.detail.bigkeys = bigkeys,
         Err(err) => apply_bigkeys_failure(&mut state, err.to_string()),
     }
 
     state
+}
+
+async fn prepare_bigkeys_connection(
+    conn: &mut impl redis::aio::ConnectionLike,
+    state: &InstanceState,
+) -> redis::RedisResult<()> {
+    if bigkeys_requires_readonly(state) {
+        redis::cmd("READONLY").query_async::<String>(conn).await?;
+    }
+
+    Ok(())
 }
 
 fn apply_info_to_state(state: &mut InstanceState, info_raw: &str, commandstats_raw: Option<&str>) {
@@ -285,6 +301,11 @@ fn apply_bigkeys_failure(state: &mut InstanceState, message: String) {
     state.detail.bigkeys.status = BigkeysScanStatus::Failed;
     state.detail.bigkeys.last_error = Some(truncate_string(message, 120));
     state.detail.bigkeys.last_completed = Some(Instant::now());
+}
+
+fn bigkeys_requires_readonly(state: &InstanceState) -> bool {
+    state.detail.cluster_enabled
+        && matches!(state.detail.role.as_deref(), Some("slave" | "replica"))
 }
 
 fn classify_error(error: &redis::RedisError) -> (Status, String) {
@@ -355,11 +376,9 @@ fn url_encode(raw: &str) -> String {
 async fn scan_bigkeys(
     conn: &mut impl redis::aio::ConnectionLike,
 ) -> redis::RedisResult<BigkeysMetrics> {
-    let (memory_usage_checked, memory_usage_supported) = detect_memory_usage_support(conn).await?;
+    let memory_usage_supported = detect_memory_usage_support(conn).await?;
     let mut cursor = 0u64;
-    let mut scanned_keys = 0u64;
     let mut largest_keys = Vec::new();
-    let mut type_summaries: HashMap<String, BigkeyTypeSummary> = HashMap::new();
 
     loop {
         let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
@@ -370,10 +389,8 @@ async fn scan_bigkeys(
             .await?;
 
         if !keys.is_empty() {
-            scanned_keys += u64::try_from(keys.len()).unwrap_or(u64::MAX);
             let entries = fetch_bigkey_entries(conn, &keys, memory_usage_supported).await?;
             for entry in entries {
-                update_bigkey_type_summary(&mut type_summaries, &entry);
                 insert_bigkey_entry(&mut largest_keys, entry);
             }
         }
@@ -385,32 +402,26 @@ async fn scan_bigkeys(
     }
 
     largest_keys.sort_by(bigkey_entry_cmp);
-    let mut type_summaries = type_summaries.into_values().collect::<Vec<_>>();
-    type_summaries.sort_by(type_summary_cmp);
 
     Ok(BigkeysMetrics {
         status: BigkeysScanStatus::Ready,
         last_error: None,
-        scanned_keys,
-        memory_usage_checked,
-        memory_usage_supported,
         largest_keys,
-        type_summaries,
         last_completed: Some(Instant::now()),
     })
 }
 
 async fn detect_memory_usage_support(
     conn: &mut impl redis::aio::ConnectionLike,
-) -> redis::RedisResult<(bool, bool)> {
+) -> redis::RedisResult<bool> {
     match redis::cmd("MEMORY")
         .arg("USAGE")
         .arg("__reditop_bigkeys_probe__")
         .query_async::<Option<u64>>(conn)
         .await
     {
-        Ok(_) => Ok((true, true)),
-        Err(err) if is_unknown_command(&err) => Ok((true, false)),
+        Ok(_) => Ok(true),
+        Err(err) if is_unknown_command(&err) => Ok(false),
         Err(err) => Err(err),
     }
 }
@@ -491,34 +502,6 @@ fn key_type_size_command(key_type: &str) -> Option<&'static str> {
     }
 }
 
-fn update_bigkey_type_summary(
-    summaries: &mut HashMap<String, BigkeyTypeSummary>,
-    entry: &BigkeyEntry,
-) {
-    let summary = summaries
-        .entry(entry.key_type.clone())
-        .or_insert_with(|| BigkeyTypeSummary {
-            key_type: entry.key_type.clone(),
-            count: 0,
-            biggest_key: None,
-            biggest_size: None,
-        });
-    summary.count += 1;
-
-    if let Some(size) = entry.size {
-        let should_replace = summary.biggest_size.is_none_or(|current| size > current)
-            || (summary.biggest_size == Some(size)
-                && summary
-                    .biggest_key
-                    .as_deref()
-                    .is_none_or(|current| entry.key.as_str() < current));
-        if should_replace {
-            summary.biggest_size = Some(size);
-            summary.biggest_key = Some(entry.key.clone());
-        }
-    }
-}
-
 fn insert_bigkey_entry(entries: &mut Vec<BigkeyEntry>, entry: BigkeyEntry) {
     entries.push(entry);
     entries.sort_by(bigkey_entry_cmp);
@@ -540,15 +523,6 @@ fn bigkey_entry_cmp(left: &BigkeyEntry, right: &BigkeyEntry) -> std::cmp::Orderi
         })
         .then_with(|| left.key_type.cmp(&right.key_type))
         .then_with(|| left.key.cmp(&right.key))
-}
-
-fn type_summary_cmp(left: &BigkeyTypeSummary, right: &BigkeyTypeSummary) -> std::cmp::Ordering {
-    right
-        .biggest_size
-        .unwrap_or(0)
-        .cmp(&left.biggest_size.unwrap_or(0))
-        .then_with(|| right.count.cmp(&left.count))
-        .then_with(|| left.key_type.cmp(&right.key_type))
 }
 
 fn is_unknown_command(error: &redis::RedisError) -> bool {
@@ -642,9 +616,10 @@ mod tests {
     use redis::Value;
 
     use super::{
-        BIGKEYS_TOP_N, BigkeyEntry, cluster_signature, insert_bigkey_entry, key_type_size_command,
-        update_bigkey_type_summary,
+        BIGKEYS_TOP_N, BigkeyEntry, bigkeys_requires_readonly, cluster_signature,
+        insert_bigkey_entry, key_type_size_command,
     };
+    use crate::model::{DetailMetrics, InstanceState};
     use crate::parse::{ClusterShard, ClusterShardNode, ClusterShardRole, parse_cluster_shards};
 
     #[test]
@@ -746,39 +721,20 @@ mod tests {
     }
 
     #[test]
-    fn bigkey_type_summary_tracks_largest_entry() {
-        let mut summaries = std::collections::HashMap::new();
-        update_bigkey_type_summary(
-            &mut summaries,
-            &BigkeyEntry {
-                key: "beta".into(),
-                key_type: "list".into(),
-                size: Some(10),
-                memory_usage: None,
-            },
-        );
-        update_bigkey_type_summary(
-            &mut summaries,
-            &BigkeyEntry {
-                key: "alpha".into(),
-                key_type: "list".into(),
-                size: Some(10),
-                memory_usage: None,
-            },
-        );
-        update_bigkey_type_summary(
-            &mut summaries,
-            &BigkeyEntry {
-                key: "gamma".into(),
-                key_type: "list".into(),
-                size: Some(25),
-                memory_usage: None,
-            },
-        );
+    fn cluster_replica_bigkeys_scan_enables_readonly() {
+        let mut state = InstanceState::new("node".into(), "127.0.0.1:6379".into());
+        state.detail = DetailMetrics {
+            cluster_enabled: true,
+            role: Some("replica".into()),
+            ..DetailMetrics::default()
+        };
+        assert!(bigkeys_requires_readonly(&state));
 
-        let summary = summaries.get("list").expect("list summary exists");
-        assert_eq!(summary.count, 3);
-        assert_eq!(summary.biggest_key.as_deref(), Some("gamma"));
-        assert_eq!(summary.biggest_size, Some(25));
+        state.detail.role = Some("master".into());
+        assert!(!bigkeys_requires_readonly(&state));
+
+        state.detail.cluster_enabled = false;
+        state.detail.role = Some("replica".into());
+        assert!(!bigkeys_requires_readonly(&state));
     }
 }
