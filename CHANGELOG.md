@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Right-align the numeric `Commandstats` columns and headers so call and timing values stay justified in the detail table.
 
 ### Fixed
+- Updated Redis connection timeout configuration and I/O error classification for compatibility with newer `redis` crate releases.
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
 - Overview emphasis styling is no longer hard-wired to underline, and can now be configured from TOML without changing the winner-selection rule.

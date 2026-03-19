@@ -77,8 +77,8 @@ async fn poll_one(
     };
 
     let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(settings.connect_timeout)
-        .set_response_timeout(settings.command_timeout);
+        .set_connection_timeout(Some(settings.connect_timeout))
+        .set_response_timeout(Some(settings.command_timeout));
 
     let mut conn = match client
         .get_multiplexed_async_connection_with_config(&config)
@@ -208,13 +208,8 @@ fn classify_error(error: &redis::RedisError) -> (Status, String) {
 
     match error.kind() {
         ErrorKind::AuthenticationFailed => (Status::AuthFail, msg),
-        ErrorKind::IoError => {
-            if msg.to_ascii_lowercase().contains("timed out") {
-                (Status::Timeout, msg)
-            } else {
-                (Status::Down, msg)
-            }
-        }
+        ErrorKind::Io if error.is_timeout() => (Status::Timeout, msg),
+        ErrorKind::Io => (Status::Down, msg),
         _ => (Status::Error, msg),
     }
 }

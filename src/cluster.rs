@@ -59,8 +59,8 @@ async fn discover_from_seed(seed: &Target, settings: &RuntimeSettings) -> Result
         .with_context(|| format!("invalid redis URL for seed {}", seed.addr))?;
 
     let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(settings.connect_timeout)
-        .set_response_timeout(settings.command_timeout);
+        .set_connection_timeout(Some(settings.connect_timeout))
+        .set_response_timeout(Some(settings.command_timeout));
 
     let mut conn = client
         .get_multiplexed_async_connection_with_config(&config)
