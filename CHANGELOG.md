@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Commandstats` detail view now supports arrow-key paging/scrolling for instances with more commands than fit on screen.
 - Simplified the `Bigkeys` detail view to a single panel: scan progress now appears in the header, completed scans show an age in seconds, and both `r` and `R` rerun the scan from that tab.
 - `Bigkeys` detail rows now use clearer `Length` and `Memory` headers with adjusted column widths so the table aligns more cleanly.
+- `Bigkeys` memory cells now show a single human-readable `MEMORY USAGE` value instead of `raw bytes (humanized)` so the column meaning is obvious at a glance.
 
 ### Fixed
 - `Bigkeys` detail view now supports `/` filtering like other list views, including filtered row counts, scrolling, and status-bar prompt text.

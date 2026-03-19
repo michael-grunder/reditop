@@ -320,8 +320,9 @@ fn sync_bigkeys_view(app: &mut AppState, terminal_height: u16) {
     }
 
     let page_len = bigkeys_page_len(terminal_height);
-    let row_count = current_bigkeys(app)
-        .map_or(0, |bigkeys| app.visible_bigkeys(&bigkeys.largest_keys).len());
+    let row_count = current_bigkeys(app).map_or(0, |bigkeys| {
+        app.visible_bigkeys(&bigkeys.largest_keys).len()
+    });
     app.clamp_bigkeys_scroll(row_count, page_len);
 }
 
@@ -1226,10 +1227,7 @@ fn format_optional_u64(value: Option<u64>) -> String {
 }
 
 fn format_optional_bytes(value: Option<u64>) -> String {
-    value.map_or_else(
-        || "-".to_string(),
-        |bytes| format!("{} ({})", format_with_commas(bytes), human_bytes(bytes)),
-    )
+    value.map_or_else(|| "-".to_string(), human_bytes)
 }
 
 fn truncate_for_title(input: &str, max_chars: usize) -> String {
@@ -1929,6 +1927,8 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("age: 0s")));
         assert!(lines.iter().any(|line| line.contains("sessions")));
         assert!(lines.iter().any(|line| line.contains("timeline")));
+        assert!(lines.iter().any(|line| line.contains("64 KiB")));
+        assert!(!lines.iter().any(|line| line.contains("65,536 (64 KiB)")));
     }
 
     #[test]

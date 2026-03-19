@@ -40,7 +40,7 @@ The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace wi
 `SCAN`, fetches each key's type, runs the matching cardinality/length command
 (`STRLEN`, `LLEN`, `SCARD`, `ZCARD`, `HLEN`, `XLEN`), and shows the largest keys
 found. The `Length` column shows that type-specific cardinality/length value,
-while `Memory` shows the `MEMORY USAGE` byte estimate when supported. Unlike
+while `Memory` shows a humanized `MEMORY USAGE` estimate when supported. Unlike
 normal polling, this scan is
 performed on demand when the `Bigkeys` tab is opened or refreshed. The header
 shows when a scan is in progress, and after completion it shows the result age
