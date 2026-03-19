@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    ModifierKeyCode, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -94,15 +95,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
             let Event::Key(key) = event::read()? else {
                 continue;
             };
-            if app.is_column_picker_open() && key.kind == KeyEventKind::Release {
-                if shift_modifier_key(key.code) {
-                    app.set_column_picker_reorder_mode(false);
-                }
-                continue;
-            }
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
             if is_quit_key(key) {
                 app.should_quit = true;
                 continue;
@@ -180,33 +172,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
-            if app.is_column_picker_open() {
-                match key.code {
-                    KeyCode::Esc => app.close_overview_modal(),
-                    KeyCode::Modifier(modifier) if is_shift_modifier(modifier) => {
-                        app.set_column_picker_reorder_mode(true);
-                    }
-                    KeyCode::Up => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            app.set_column_picker_reorder_mode(true);
-                            app.move_selected_visible_column(-1);
-                        } else {
-                            app.set_column_picker_reorder_mode(false);
-                            app.move_column_picker_selection(-1);
-                        }
-                    }
-                    KeyCode::Down => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            app.set_column_picker_reorder_mode(true);
-                            app.move_selected_visible_column(1);
-                        } else {
-                            app.set_column_picker_reorder_mode(false);
-                            app.move_column_picker_selection(1);
-                        }
-                    }
-                    KeyCode::Enter | KeyCode::Char(' ') => app.toggle_selected_column_visibility(),
-                    _ => {}
-                }
+            if app.is_column_picker_open() && handle_column_picker_key(&mut app, key) {
+                continue;
+            }
+
+            if key.kind != KeyEventKind::Press {
                 continue;
             }
 
@@ -1543,6 +1513,46 @@ fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState
     frame.render_stateful_widget(table, popup, &mut state);
 }
 
+fn handle_column_picker_key(app: &mut AppState, key: KeyEvent) -> bool {
+    match key.kind {
+        KeyEventKind::Release => {
+            if shift_modifier_key(key.code) {
+                app.set_column_picker_reorder_mode(false);
+            }
+            true
+        }
+        KeyEventKind::Press | KeyEventKind::Repeat => {
+            match key.code {
+                KeyCode::Esc => app.close_overview_modal(),
+                KeyCode::Modifier(modifier) if is_shift_modifier(modifier) => {
+                    app.set_column_picker_reorder_mode(true);
+                }
+                KeyCode::Up => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        app.set_column_picker_reorder_mode(true);
+                        app.move_selected_column(-1);
+                    } else {
+                        app.set_column_picker_reorder_mode(false);
+                        app.move_column_picker_selection(-1);
+                    }
+                }
+                KeyCode::Down => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        app.set_column_picker_reorder_mode(true);
+                        app.move_selected_column(1);
+                    } else {
+                        app.set_column_picker_reorder_mode(false);
+                        app.move_column_picker_selection(1);
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => app.toggle_selected_column_visibility(),
+                _ => {}
+            }
+            true
+        }
+    }
+}
+
 const fn column_picker_title(app: &AppState) -> &'static str {
     if app.column_picker_reorder_mode {
         "Columns (Shift+Up/Down move, Enter/Space toggle, Esc close)"
@@ -1602,14 +1612,26 @@ const fn carat_color(app: &AppState) -> Color {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        )
+    )?;
     let backend = CrosstermBackend::new(stdout);
     Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -1618,7 +1640,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 mod tests {
     use std::sync::Arc;
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode};
     use ratatui::{
         Terminal,
         backend::TestBackend,
@@ -1629,8 +1651,9 @@ mod tests {
         Align, background_color, bigkeys_age_title, carat_color, cluster_color_for_token,
         commandstats_page_len, compute_column_widths, detail_tab_index_for_shortcut,
         detail_tabs_widget, draw, fit_cell_text, format_aligned_rows, format_with_commas,
-        help_bindings, is_quit_key,
+        handle_column_picker_key, help_bindings, is_quit_key,
     };
+    use crate::app::AppState;
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
     use crate::model::{
@@ -1812,6 +1835,35 @@ mod tests {
 
         assert_eq!(widths.iter().sum::<u16>() + 2, 8);
         assert!(widths.iter().all(|width| *width >= 1));
+    }
+
+    #[test]
+    fn column_picker_shift_modifier_toggles_reorder_mode_on_press_and_release() {
+        let mut app = AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.open_column_picker();
+
+        assert!(handle_column_picker_key(
+            &mut app,
+            KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            ),
+        ));
+        assert!(app.column_picker_reorder_mode);
+
+        assert!(handle_column_picker_key(
+            &mut app,
+            KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            ),
+        ));
+        assert!(!app.column_picker_reorder_mode);
     }
 
     #[test]

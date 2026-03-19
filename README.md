@@ -34,7 +34,7 @@
 - `t`: toggle tree/flat
 - `s`: cycle sort column
 - `v`: open overview column picker
-- `Shift+Up/Down`: reorder visible columns inside the overview column picker
+- `Shift+Up/Down`: reorder columns inside the overview column picker
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
 - `/`: start filter input in overview, or filter `Commandstats` or `Bigkeys` rows in detail view
 - `r` / `R`: refresh now, or rerun the on-demand `Bigkeys` scan while that tab is open

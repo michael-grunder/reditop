@@ -404,25 +404,11 @@ impl AppState {
         self.column_picker_reorder_mode = enabled && self.is_column_picker_open();
     }
 
-    pub fn move_selected_visible_column(&mut self, delta: isize) {
+    pub fn move_selected_column(&mut self, delta: isize) {
         let columns = self.available_overview_columns();
         let Some(chosen_key) = columns.get(self.column_picker_index).cloned() else {
             return;
         };
-        let visible_columns = self.visible_column_keys();
-        let Some(current_visible_idx) = visible_columns.iter().position(|key| key == &chosen_key)
-        else {
-            return;
-        };
-
-        let current = isize::try_from(current_visible_idx).unwrap_or(isize::MAX);
-        let max_index = isize::try_from(visible_columns.len() - 1).unwrap_or(0);
-        let next = (current + delta).clamp(0, max_index);
-        let next_visible_idx = usize::try_from(next).unwrap_or(current_visible_idx);
-        if next_visible_idx == current_visible_idx {
-            return;
-        }
-
         let Some(chosen_order_idx) = self
             .runtime_overview_column_order
             .iter()
@@ -430,18 +416,19 @@ impl AppState {
         else {
             return;
         };
-        let swap_key = &visible_columns[next_visible_idx];
-        let Some(swap_order_idx) = self
-            .runtime_overview_column_order
-            .iter()
-            .position(|key| key == swap_key)
-        else {
+
+        let current = isize::try_from(chosen_order_idx).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(self.runtime_overview_column_order.len().saturating_sub(1))
+            .unwrap_or(0);
+        let next = (current + delta).clamp(0, max_index);
+        let next_order_idx = usize::try_from(next).unwrap_or(chosen_order_idx);
+        if next_order_idx == chosen_order_idx {
             return;
-        };
+        }
 
         self.runtime_overview_column_order
-            .swap(chosen_order_idx, swap_order_idx);
-        self.column_picker_index = swap_order_idx;
+            .swap(chosen_order_idx, next_order_idx);
+        self.column_picker_index = next_order_idx;
     }
 
     pub fn toggle_selected_column_visibility(&mut self) {
@@ -1173,7 +1160,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_selected_visible_column_reorders_runtime_columns() {
+    fn moving_selected_column_reorders_runtime_columns() {
         let mut app = app();
         app.runtime_overview_column_order =
             vec!["alias".to_string(), "ops".to_string(), "status".to_string()];
@@ -1182,7 +1169,7 @@ mod tests {
         app.open_column_picker();
         app.column_picker_index = 1;
 
-        app.move_selected_visible_column(1);
+        app.move_selected_column(1);
 
         assert_eq!(
             app.runtime_overview_column_order,
@@ -1192,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_hidden_column_does_not_change_runtime_order() {
+    fn moving_hidden_column_reorders_runtime_order() {
         let mut app = app();
         app.runtime_overview_column_order = vec![
             "alias".to_string(),
@@ -1207,16 +1194,17 @@ mod tests {
             .position(|key| key == "cluster")
             .unwrap_or(0);
 
-        app.move_selected_visible_column(-1);
+        app.move_selected_column(-1);
 
         assert_eq!(
             app.runtime_overview_column_order,
             vec![
                 "alias".to_string(),
-                "ops".to_string(),
                 "cluster".to_string(),
+                "ops".to_string(),
             ]
         );
+        assert_eq!(app.column_picker_index, 1);
     }
 
     #[test]
@@ -1279,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_visible_column_preserves_hidden_column_position() {
+    fn moving_column_swaps_with_hidden_neighbors_in_picker_order() {
         let mut app = app();
         app.runtime_overview_column_order = vec![
             "alias".to_string(),
@@ -1296,22 +1284,22 @@ mod tests {
             .position(|key| key == "ops")
             .unwrap_or(0);
 
-        app.move_selected_visible_column(-1);
+        app.move_selected_column(-1);
 
         assert_eq!(
             app.runtime_overview_column_order,
             vec![
+                "alias".to_string(),
                 "ops".to_string(),
                 "cluster".to_string(),
-                "alias".to_string(),
                 "status".to_string(),
             ]
         );
         assert_eq!(
             app.visible_column_keys(),
-            vec!["ops".to_string(), "alias".to_string(), "status".to_string()]
+            vec!["alias".to_string(), "ops".to_string(), "status".to_string()]
         );
-        assert_eq!(app.column_picker_index, 0);
+        assert_eq!(app.column_picker_index, 1);
     }
 
     #[test]
