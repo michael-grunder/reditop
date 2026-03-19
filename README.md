@@ -33,14 +33,15 @@
 - `t`: toggle tree/flat
 - `s`: cycle sort column
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
-- `/`: start filter input in overview, or filter `Commandstats` rows in detail view
+- `/`: start filter input in overview, or filter `Commandstats` or `Bigkeys` rows in detail view
 - `r` / `R`: refresh now, or rerun the on-demand `Bigkeys` scan while that tab is open
 
 The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace with
 `SCAN`, fetches each key's type, runs the matching cardinality/length command
 (`STRLEN`, `LLEN`, `SCARD`, `ZCARD`, `HLEN`, `XLEN`), and shows the largest keys
-found. When the target supports `MEMORY USAGE`, that byte estimate is fetched and
-displayed alongside the logical size. Unlike normal polling, this scan is
+found. The `Length` column shows that type-specific cardinality/length value,
+while `Memory` shows the `MEMORY USAGE` byte estimate when supported. Unlike
+normal polling, this scan is
 performed on demand when the `Bigkeys` tab is opened or refreshed. The header
 shows when a scan is in progress, and after completion it shows the result age
 in seconds.

@@ -143,6 +143,24 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
+            if app.bigkeys_view.is_filtering {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        app.bigkeys_view.is_filtering = false;
+                    }
+                    KeyCode::Backspace => {
+                        let _ = app.bigkeys_view.filter.pop();
+                        sync_bigkeys_view(&mut app, terminal.size()?.height);
+                    }
+                    KeyCode::Char(ch) => {
+                        app.bigkeys_view.filter.push(ch);
+                        sync_bigkeys_view(&mut app, terminal.size()?.height);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if app.is_sorting {
                 match key.code {
                     KeyCode::Esc => app.close_sort_picker(),
@@ -184,6 +202,10 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                     app.start_commandstats_filter_input(false);
                     sync_commandstats_view(&mut app, terminal.size()?.height);
                 }
+                KeyCode::Char('/') if is_bigkeys_detail(&app) => {
+                    app.start_bigkeys_filter_input(false);
+                    sync_bigkeys_view(&mut app, terminal.size()?.height);
+                }
                 KeyCode::Char('r' | 'R') => {
                     let request = if is_bigkeys_detail(&app) {
                         app.selected_key().map(|key| {
@@ -214,13 +236,15 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::Up if is_bigkeys_detail(&app) => {
                     if let Some(bigkeys) = current_bigkeys(&app) {
                         let page_len = bigkeys_page_len(terminal.size()?.height);
-                        app.move_bigkeys_scroll(-1, bigkeys.largest_keys.len(), page_len);
+                        let visible_len = app.visible_bigkeys(&bigkeys.largest_keys).len();
+                        app.move_bigkeys_scroll(-1, visible_len, page_len);
                     }
                 }
                 KeyCode::Down if is_bigkeys_detail(&app) => {
                     if let Some(bigkeys) = current_bigkeys(&app) {
                         let page_len = bigkeys_page_len(terminal.size()?.height);
-                        app.move_bigkeys_scroll(1, bigkeys.largest_keys.len(), page_len);
+                        let visible_len = app.visible_bigkeys(&bigkeys.largest_keys).len();
+                        app.move_bigkeys_scroll(1, visible_len, page_len);
                     }
                 }
                 KeyCode::Enter if app.active_view == ActiveView::Overview => {
@@ -231,6 +255,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
                     app.commandstats_view.is_filtering = false;
+                    app.bigkeys_view.is_filtering = false;
                     app.active_view = ActiveView::Overview;
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Help => app.close_help_view(),
@@ -290,11 +315,13 @@ fn sync_commandstats_view(app: &mut AppState, terminal_height: u16) {
 
 fn sync_bigkeys_view(app: &mut AppState, terminal_height: u16) {
     if !is_bigkeys_detail(app) {
+        app.bigkeys_view.is_filtering = false;
         return;
     }
 
     let page_len = bigkeys_page_len(terminal_height);
-    let row_count = current_bigkeys(app).map_or(0, |bigkeys| bigkeys.largest_keys.len());
+    let row_count = current_bigkeys(app)
+        .map_or(0, |bigkeys| app.visible_bigkeys(&bigkeys.largest_keys).len());
     app.clamp_bigkeys_scroll(row_count, page_len);
 }
 
@@ -1003,7 +1030,8 @@ fn draw_bigkeys(
     area: Rect,
     bigkeys: &crate::model::BigkeysMetrics,
 ) {
-    let block = bigkeys_block(app, bigkeys, 0, bigkeys.largest_keys.len());
+    let visible_total = app.visible_bigkeys(&bigkeys.largest_keys).len();
+    let block = bigkeys_block(app, bigkeys, visible_total, 0, visible_total);
 
     if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running)
         && bigkeys.largest_keys.is_empty()
@@ -1040,6 +1068,16 @@ fn draw_bigkeys(
         return;
     }
 
+    if visible_total == 0 {
+        frame.render_widget(
+            Paragraph::new("No keys match the current filter")
+                .style(base_style(app))
+                .block(block),
+            area,
+        );
+        return;
+    }
+
     frame.render_widget(bigkeys_table(app, area.height, bigkeys), area);
 }
 
@@ -1057,17 +1095,21 @@ fn commandstats_title(app: &AppState, start: usize, end: usize, total: usize) ->
     title
 }
 
-fn bigkeys_title(bigkeys: &crate::model::BigkeysMetrics, start: usize, end: usize) -> String {
-    let mut title = if bigkeys.largest_keys.is_empty() {
+fn bigkeys_title(
+    app: &AppState,
+    bigkeys: &crate::model::BigkeysMetrics,
+    visible_total: usize,
+    start: usize,
+    end: usize,
+) -> String {
+    let mut title = if visible_total == 0 {
         "Bigkeys".to_string()
     } else {
-        format!(
-            "Bigkeys {}-{} / {}",
-            start + 1,
-            end,
-            bigkeys.largest_keys.len()
-        )
+        format!("Bigkeys {}-{} / {}", start + 1, end, visible_total)
     };
+    if !app.bigkeys_view.filter.is_empty() {
+        let _ = write!(title, "  filter=/{}", app.bigkeys_view.filter);
+    }
     if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running) {
         let _ = write!(title, "  scanning");
     }
@@ -1090,12 +1132,13 @@ fn bigkeys_age_title(bigkeys: &crate::model::BigkeysMetrics) -> Option<Line<'sta
 fn bigkeys_block(
     app: &AppState,
     bigkeys: &crate::model::BigkeysMetrics,
+    visible_total: usize,
     start: usize,
     end: usize,
 ) -> Block<'static> {
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .title(bigkeys_title(bigkeys, start, end))
+        .title(bigkeys_title(app, bigkeys, visible_total, start, end))
         .style(base_style(app));
 
     if let Some(age) = bigkeys_age_title(bigkeys) {
@@ -1110,13 +1153,14 @@ fn bigkeys_table<'a>(
     area_height: u16,
     bigkeys: &'a crate::model::BigkeysMetrics,
 ) -> Table<'a> {
+    let visible = app.visible_bigkeys(&bigkeys.largest_keys);
     let page_len = bigkeys_page_len(area_height);
     let start = app
         .bigkeys_view
         .scroll_offset
-        .min(bigkeys.largest_keys.len().saturating_sub(page_len.max(1)));
-    let end = (start + page_len).min(bigkeys.largest_keys.len());
-    let rows: Vec<Row<'a>> = bigkeys.largest_keys[start..end]
+        .min(visible.len().saturating_sub(page_len.max(1)));
+    let end = (start + page_len).min(visible.len());
+    let rows: Vec<Row<'a>> = visible[start..end]
         .iter()
         .map(|entry| {
             Row::new(vec![
@@ -1131,9 +1175,9 @@ fn bigkeys_table<'a>(
     Table::new(
         rows,
         [
-            Constraint::Min(24),
-            Constraint::Length(10),
-            Constraint::Length(14),
+            Constraint::Min(26),
+            Constraint::Length(12),
+            Constraint::Length(16),
             Constraint::Length(18),
         ],
     )
@@ -1141,12 +1185,12 @@ fn bigkeys_table<'a>(
         Row::new(vec![
             Cell::from("Key"),
             Cell::from("Type"),
-            Cell::from(Line::from("Size").right_aligned()),
+            Cell::from(Line::from("Length").right_aligned()),
             Cell::from(Line::from("Memory").right_aligned()),
         ])
         .style(base_style(app).add_modifier(Modifier::BOLD)),
     )
-    .block(bigkeys_block(app, bigkeys, start, end))
+    .block(bigkeys_block(app, bigkeys, visible.len(), start, end))
     .style(base_style(app))
     .column_spacing(1)
 }
@@ -1245,6 +1289,8 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         format!("{}: {}", app.filter_prompt_mode.label(), app.filter)
     } else if app.commandstats_view.is_filtering {
         format!("Commandstats Filter: /{}", app.commandstats_view.filter)
+    } else if app.bigkeys_view.is_filtering {
+        format!("Bigkeys Filter: /{}", app.bigkeys_view.filter)
     } else if let Some(key) = app.selected_key() {
         app.instances
             .get(&key)
@@ -1294,7 +1340,10 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "h",
             "Toggle host rendering (auto hide when all hosts are the same)",
         ),
-        ("/", "Start filter input in overview or Commandstats filter"),
+        (
+            "/",
+            "Start filter input in overview, Commandstats, or Bigkeys",
+        ),
         ("Backspace", "Delete filter character while editing"),
     ]
 }
@@ -1310,7 +1359,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview or Commandstats";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1876,9 +1925,89 @@ mod tests {
 
         let lines = buffer_lines(terminal.backend().buffer());
         assert!(lines.iter().any(|line| line.contains("Bigkeys")));
+        assert!(lines.iter().any(|line| line.contains("Length")));
         assert!(lines.iter().any(|line| line.contains("age: 0s")));
         assert!(lines.iter().any(|line| line.contains("sessions")));
         assert!(lines.iter().any(|line| line.contains("timeline")));
+    }
+
+    #[test]
+    fn detail_bigkeys_tab_filters_rows_and_shows_filter_in_title() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 4;
+        app.bigkeys_view.filter = "hash".into();
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.bigkeys.status = BigkeysScanStatus::Ready;
+        instance.detail.bigkeys.last_completed = Some(std::time::Instant::now());
+        instance.detail.bigkeys.largest_keys = vec![
+            BigkeyEntry {
+                key: "sessions".into(),
+                key_type: "hash".into(),
+                size: Some(2_048),
+                memory_usage: Some(65_536),
+            },
+            BigkeyEntry {
+                key: "timeline".into(),
+                key_type: "list".into(),
+                size: Some(1_024),
+                memory_usage: Some(32_768),
+            },
+        ];
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 16);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("filter=/hash")));
+        assert!(lines.iter().any(|line| line.contains("sessions")));
+        assert!(!lines.iter().any(|line| line.contains("timeline")));
+    }
+
+    #[test]
+    fn detail_bigkeys_tab_shows_empty_state_for_filter_without_matches() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 4;
+        app.bigkeys_view.filter = "nomatch".into();
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.bigkeys.status = BigkeysScanStatus::Ready;
+        instance.detail.bigkeys.last_completed = Some(std::time::Instant::now());
+        instance.detail.bigkeys.largest_keys = vec![BigkeyEntry {
+            key: "sessions".into(),
+            key_type: "hash".into(),
+            size: Some(2_048),
+            memory_usage: Some(65_536),
+        }];
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 16);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("filter=/nomatch")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("No keys match the current filter"))
+        );
     }
 
     #[test]

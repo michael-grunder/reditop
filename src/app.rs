@@ -45,6 +45,8 @@ pub struct CommandstatsViewState {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BigkeysViewState {
+    pub filter: String,
+    pub is_filtering: bool,
     pub scroll_offset: usize,
 }
 
@@ -223,6 +225,29 @@ impl AppState {
         let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
         let next = (current + delta).clamp(0, max_index);
         self.bigkeys_view.scroll_offset = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub fn start_bigkeys_filter_input(&mut self, clear_existing: bool) {
+        if clear_existing {
+            self.bigkeys_view.filter.clear();
+        }
+        self.bigkeys_view.is_filtering = true;
+        self.bigkeys_view.scroll_offset = 0;
+    }
+
+    pub fn visible_bigkeys<'a>(
+        &self,
+        entries: &'a [crate::model::BigkeyEntry],
+    ) -> Vec<&'a crate::model::BigkeyEntry> {
+        let needle = self.bigkeys_view.filter.trim().to_ascii_lowercase();
+        entries
+            .iter()
+            .filter(|entry| {
+                needle.is_empty()
+                    || entry.key.to_ascii_lowercase().contains(&needle)
+                    || entry.key_type.to_ascii_lowercase().contains(&needle)
+            })
+            .collect()
     }
 
     pub fn visible_rows(&self) -> Vec<DisplayRow> {
@@ -959,5 +984,55 @@ mod tests {
 
         app.move_commandstats_scroll(-5, &stats, 3);
         assert_eq!(app.commandstats_view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn start_bigkeys_filter_input_sets_clear_behavior() {
+        let mut app = app();
+        app.bigkeys_view.filter = "session".to_string();
+
+        app.start_bigkeys_filter_input(false);
+        assert!(app.bigkeys_view.is_filtering);
+        assert_eq!(app.bigkeys_view.filter, "session");
+
+        app.start_bigkeys_filter_input(true);
+        assert!(app.bigkeys_view.is_filtering);
+        assert!(app.bigkeys_view.filter.is_empty());
+        assert_eq!(app.bigkeys_view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn visible_bigkeys_filters_by_key_and_type() {
+        let mut app = app();
+        let entries = vec![
+            crate::model::BigkeyEntry {
+                key: "session:1".into(),
+                key_type: "string".into(),
+                size: Some(32),
+                memory_usage: Some(128),
+            },
+            crate::model::BigkeyEntry {
+                key: "timeline".into(),
+                key_type: "zset".into(),
+                size: Some(2_000),
+                memory_usage: Some(70_968),
+            },
+            crate::model::BigkeyEntry {
+                key: "profile".into(),
+                key_type: "hash".into(),
+                size: Some(100),
+                memory_usage: Some(2_123),
+            },
+        ];
+
+        app.bigkeys_view.filter = "set".to_string();
+        let visible = app.visible_bigkeys(&entries);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].key, "timeline");
+
+        app.bigkeys_view.filter = "session".to_string();
+        let visible = app.visible_bigkeys(&entries);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].key, "session:1");
     }
 }

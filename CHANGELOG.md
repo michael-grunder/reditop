@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Right-align the numeric `Commandstats` columns and headers so call and timing values stay justified in the detail table.
 - `Commandstats` detail view now supports arrow-key paging/scrolling for instances with more commands than fit on screen.
 - Simplified the `Bigkeys` detail view to a single panel: scan progress now appears in the header, completed scans show an age in seconds, and both `r` and `R` rerun the scan from that tab.
+- `Bigkeys` detail rows now use clearer `Length` and `Memory` headers with adjusted column widths so the table aligns more cleanly.
 
 ### Fixed
+- `Bigkeys` detail view now supports `/` filtering like other list views, including filtered row counts, scrolling, and status-bar prompt text.
 - Updated Redis connection timeout configuration and I/O error classification for compatibility with newer `redis` crate releases.
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
 - TUI quit handling now treats `Ctrl+C` the same as `q`, including while modal inputs like filter or sort are open.
