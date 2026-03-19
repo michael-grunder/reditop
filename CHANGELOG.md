@@ -8,9 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 ### Added
 - Added an initial GitHub Actions CI workflow that runs `cargo fmt --check`, `cargo test`, and `cargo clippy --all-targets --all-features -- -D warnings`, then uploads release artifacts for `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`.
+- Added `/` filtering for the detail `Commandstats` tab so operators can narrow the list to matching command names inline.
 
 ### Changed
 - Right-align the numeric `Commandstats` columns and headers so call and timing values stay justified in the detail table.
+- `Commandstats` detail view now supports arrow-key paging/scrolling for instances with more commands than fit on screen.
 
 ### Fixed
 - Updated Redis connection timeout configuration and I/O error classification for compatibility with newer `redis` crate releases.

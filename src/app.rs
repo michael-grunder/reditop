@@ -36,6 +36,13 @@ pub struct DisplayRow {
     pub stale: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandstatsViewState {
+    pub filter: String,
+    pub is_filtering: bool,
+    pub scroll_offset: usize,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppState {
     pub settings: RuntimeSettings,
@@ -52,6 +59,7 @@ pub struct AppState {
     pub previous_view: ActiveView,
     pub selected_index: usize,
     pub detail_tab: usize,
+    pub commandstats_view: CommandstatsViewState,
     pub force_show_host: bool,
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
@@ -81,6 +89,7 @@ impl AppState {
             previous_view: ActiveView::Overview,
             selected_index: 0,
             detail_tab: 0,
+            commandstats_view: CommandstatsViewState::default(),
             force_show_host: false,
             instances: HashMap::new(),
             should_quit: false,
@@ -140,6 +149,58 @@ impl AppState {
         }
         self.is_filtering = true;
         self.clamp_selection();
+    }
+
+    pub fn start_commandstats_filter_input(&mut self, clear_existing: bool) {
+        if clear_existing {
+            self.commandstats_view.filter.clear();
+        }
+        self.commandstats_view.is_filtering = true;
+        self.commandstats_view.scroll_offset = 0;
+    }
+
+    pub fn visible_commandstats<'a>(
+        &self,
+        stats: &'a [crate::model::CommandStat],
+    ) -> Vec<&'a crate::model::CommandStat> {
+        let needle = self.commandstats_view.filter.trim().to_ascii_lowercase();
+        let mut filtered = stats
+            .iter()
+            .filter(|stat| needle.is_empty() || stat.command.to_ascii_lowercase().contains(&needle))
+            .collect::<Vec<_>>();
+        filtered.sort_by(|left, right| {
+            right
+                .calls
+                .cmp(&left.calls)
+                .then_with(|| left.command.cmp(&right.command))
+        });
+        filtered
+    }
+
+    pub fn clamp_commandstats_scroll(
+        &mut self,
+        stats: &[crate::model::CommandStat],
+        page_len: usize,
+    ) {
+        let visible_len = self.visible_commandstats(stats).len();
+        let max_offset = visible_len.saturating_sub(page_len.max(1));
+        if self.commandstats_view.scroll_offset > max_offset {
+            self.commandstats_view.scroll_offset = max_offset;
+        }
+    }
+
+    pub fn move_commandstats_scroll(
+        &mut self,
+        delta: isize,
+        stats: &[crate::model::CommandStat],
+        page_len: usize,
+    ) {
+        let visible_len = self.visible_commandstats(stats).len();
+        let max_offset = visible_len.saturating_sub(page_len.max(1));
+        let current = isize::try_from(self.commandstats_view.scroll_offset).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
+        let next = (current + delta).clamp(0, max_index);
+        self.commandstats_view.scroll_offset = usize::try_from(next).unwrap_or(0);
     }
 
     pub fn visible_rows(&self) -> Vec<DisplayRow> {
@@ -608,7 +669,8 @@ const fn root_kind_rank(kind: InstanceType) -> u8 {
 mod tests {
     use super::{AppState, FilterPromptMode};
     use crate::model::{
-        InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode, UiTheme, ViewMode,
+        CommandStat, InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode,
+        UiTheme, ViewMode,
     };
     use crate::registry::ColumnRegistry;
     use std::collections::HashMap;
@@ -804,5 +866,76 @@ mod tests {
 
         assert_eq!(emphasized.get("lat_last"), Some(&"b".to_string()));
         assert_eq!(emphasized.get("lat_max"), Some(&"c".to_string()));
+    }
+
+    #[test]
+    fn visible_commandstats_filters_and_sorts_by_calls_desc() {
+        let mut app = app();
+        app.commandstats_view.filter = "clu".to_string();
+
+        let stats = vec![
+            CommandStat {
+                command: "get".into(),
+                calls: 100,
+                usec: 1_000,
+                usec_per_call: 10.0,
+            },
+            CommandStat {
+                command: "cluster|shards".into(),
+                calls: 500,
+                usec: 2_000,
+                usec_per_call: 4.0,
+            },
+            CommandStat {
+                command: "cluster|info".into(),
+                calls: 50,
+                usec: 500,
+                usec_per_call: 10.0,
+            },
+        ];
+
+        let visible = app.visible_commandstats(&stats);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].command, "cluster|shards");
+        assert_eq!(visible[1].command, "cluster|info");
+    }
+
+    #[test]
+    fn commandstats_scroll_is_clamped_to_visible_page() {
+        let mut app = app();
+        app.commandstats_view.scroll_offset = 10;
+
+        let stats = vec![
+            CommandStat {
+                command: "a".into(),
+                calls: 4,
+                usec: 4,
+                usec_per_call: 1.0,
+            },
+            CommandStat {
+                command: "b".into(),
+                calls: 3,
+                usec: 3,
+                usec_per_call: 1.0,
+            },
+            CommandStat {
+                command: "c".into(),
+                calls: 2,
+                usec: 2,
+                usec_per_call: 1.0,
+            },
+            CommandStat {
+                command: "d".into(),
+                calls: 1,
+                usec: 1,
+                usec_per_call: 1.0,
+            },
+        ];
+
+        app.clamp_commandstats_scroll(&stats, 3);
+        assert_eq!(app.commandstats_view.scroll_offset, 1);
+
+        app.move_commandstats_scroll(-5, &stats, 3);
+        assert_eq!(app.commandstats_view.scroll_offset, 0);
     }
 }

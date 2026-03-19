@@ -25,7 +25,7 @@
 - `F6`: open sort picker from currently visible overview columns
 - `H`: open full help page
 - `?`: toggle help
-- `Up/Down`: move selection
+- `Up/Down`: move selection in overview, or scroll/paginate `Commandstats` in detail view
 - `Enter`: open detail
 - `Esc`: back to previous view (or stop filter editing)
 - `Tab` / `Left` / `Right`: cycle detail tabs
@@ -33,7 +33,7 @@
 - `t`: toggle tree/flat
 - `s`: cycle sort column
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
-- `/`: start filter input
+- `/`: start filter input in overview, or filter `Commandstats` rows in detail view
 - `r`: refresh now
 
 ## CLI

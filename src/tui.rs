@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{self, Stdout};
 use std::time::Duration;
 
@@ -118,6 +119,24 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
+            if app.commandstats_view.is_filtering {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        app.commandstats_view.is_filtering = false;
+                    }
+                    KeyCode::Backspace => {
+                        let _ = app.commandstats_view.filter.pop();
+                        sync_commandstats_view(&mut app, terminal.size()?.height);
+                    }
+                    KeyCode::Char(ch) => {
+                        app.commandstats_view.filter.push(ch);
+                        sync_commandstats_view(&mut app, terminal.size()?.height);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if app.is_sorting {
                 match key.code {
                     KeyCode::Esc => app.close_sort_picker(),
@@ -155,29 +174,50 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::Char('/') if app.active_view == ActiveView::Overview => {
                     app.start_filter_input(FilterPromptMode::Filter, false);
                 }
+                KeyCode::Char('/') if is_commandstats_detail(&app) => {
+                    app.start_commandstats_filter_input(false);
+                    sync_commandstats_view(&mut app, terminal.size()?.height);
+                }
                 KeyCode::Char('r') => {
                     let _ = refresh_tx.try_send(());
                 }
                 KeyCode::Up if app.active_view == ActiveView::Overview => app.move_selection(-1),
                 KeyCode::Down if app.active_view == ActiveView::Overview => app.move_selection(1),
+                KeyCode::Up if is_commandstats_detail(&app) => {
+                    if let Some(stats) = current_commandstats(&app).map(ToOwned::to_owned) {
+                        let page_len = commandstats_page_len(terminal.size()?.height);
+                        app.move_commandstats_scroll(-1, &stats, page_len);
+                    }
+                }
+                KeyCode::Down if is_commandstats_detail(&app) => {
+                    if let Some(stats) = current_commandstats(&app).map(ToOwned::to_owned) {
+                        let page_len = commandstats_page_len(terminal.size()?.height);
+                        app.move_commandstats_scroll(1, &stats, page_len);
+                    }
+                }
                 KeyCode::Enter if app.active_view == ActiveView::Overview => {
                     if app.selected_key().is_some() {
                         app.active_view = ActiveView::Detail;
+                        sync_commandstats_view(&mut app, terminal.size()?.height);
                     }
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
+                    app.commandstats_view.is_filtering = false;
                     app.active_view = ActiveView::Overview;
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Help => app.close_help_view(),
                 KeyCode::Tab | KeyCode::Right if app.active_view == ActiveView::Detail => {
                     app.detail_tab = (app.detail_tab + 1) % DETAIL_TABS.len();
+                    sync_commandstats_view(&mut app, terminal.size()?.height);
                 }
                 KeyCode::Left if app.active_view == ActiveView::Detail => {
                     app.detail_tab = (app.detail_tab + DETAIL_TABS.len() - 1) % DETAIL_TABS.len();
+                    sync_commandstats_view(&mut app, terminal.size()?.height);
                 }
                 KeyCode::Char(ch) if app.active_view == ActiveView::Detail => {
                     if let Some(index) = detail_tab_index_for_shortcut(ch) {
                         app.detail_tab = index;
+                        sync_commandstats_view(&mut app, terminal.size()?.height);
                     }
                 }
                 _ => {}
@@ -186,6 +226,36 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
     }
 
     Ok(())
+}
+
+fn current_commandstats(app: &AppState) -> Option<&[crate::model::CommandStat]> {
+    let key = app.selected_key()?;
+    let instance = app.instances.get(&key)?;
+    Some(&instance.detail.commandstats)
+}
+
+fn is_commandstats_detail(app: &AppState) -> bool {
+    app.active_view == ActiveView::Detail && app.detail_tab == 3
+}
+
+fn sync_commandstats_view(app: &mut AppState, terminal_height: u16) {
+    if !is_commandstats_detail(app) {
+        app.commandstats_view.is_filtering = false;
+        return;
+    }
+
+    let page_len = commandstats_page_len(terminal_height);
+    let stats =
+        current_commandstats(app).map_or_else(Vec::new, <[crate::model::CommandStat]>::to_vec);
+    app.clamp_commandstats_scroll(&stats, page_len);
+}
+
+const fn commandstats_page_len(area_height: u16) -> usize {
+    if area_height <= 6 {
+        1
+    } else {
+        area_height as usize - 6
+    }
 }
 
 const fn is_quit_key(key: KeyEvent) -> bool {
@@ -772,15 +842,29 @@ fn draw_commandstats(
         return;
     }
 
-    let mut sorted_stats = stats.to_vec();
-    sorted_stats.sort_by(|left, right| {
-        right
-            .calls
-            .cmp(&left.calls)
-            .then_with(|| left.command.cmp(&right.command))
-    });
+    let visible_stats = app.visible_commandstats(stats);
+    if visible_stats.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No commandstats match the current filter")
+                .style(base_style(app))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(commandstats_title(app, 0, 0, 0))
+                        .style(base_style(app)),
+                ),
+            area,
+        );
+        return;
+    }
 
-    let rows: Vec<Row<'_>> = sorted_stats
+    let page_len = commandstats_page_len(area.height);
+    let start = app
+        .commandstats_view
+        .scroll_offset
+        .min(visible_stats.len().saturating_sub(page_len.max(1)));
+    let end = (start + page_len).min(visible_stats.len());
+    let rows: Vec<Row<'_>> = visible_stats[start..end]
         .iter()
         .map(|stat| {
             Row::new(vec![
@@ -812,13 +896,27 @@ fn draw_commandstats(
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Commandstats")
+            .title(commandstats_title(app, start, end, visible_stats.len()))
             .style(base_style(app)),
     )
     .style(base_style(app))
     .column_spacing(1);
 
     frame.render_widget(table, area);
+}
+
+fn commandstats_title(app: &AppState, start: usize, end: usize, total: usize) -> String {
+    let mut title = if total == 0 {
+        "Commandstats".to_string()
+    } else {
+        format!("Commandstats {}-{} / {}", start + 1, end, total)
+    };
+
+    if !app.commandstats_view.filter.is_empty() {
+        let _ = write!(title, "  filter=/{}", app.commandstats_view.filter);
+    }
+
+    title
 }
 
 fn detail_tab_label(tab: &DetailTabSpec) -> Line<'static> {
@@ -901,6 +999,8 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let prompt = if app.is_filtering {
         format!("{}: {}", app.filter_prompt_mode.label(), app.filter)
+    } else if app.commandstats_view.is_filtering {
+        format!("Commandstats Filter: /{}", app.commandstats_view.filter)
     } else if let Some(key) = app.selected_key() {
         app.instances
             .get(&key)
@@ -931,7 +1031,10 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "S / L / I / C",
             "Jump to Summary, Latency, Info Raw, or Commandstats in detail",
         ),
-        ("Up/Down", "Move selection in overview"),
+        (
+            "Up/Down",
+            "Move selection in overview or scroll commandstats",
+        ),
         ("?", "Toggle help overlay"),
         ("r", "Refresh now"),
         ("F3", "Start search input in overview"),
@@ -947,7 +1050,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "h",
             "Toggle host rendering (auto hide when all hosts are the same)",
         ),
-        ("/", "Start filter input in overview"),
+        ("/", "Start filter input in overview or commandstats filter"),
         ("Backspace", "Delete filter character while editing"),
     ]
 }
@@ -963,7 +1066,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C jump to detail panels\nUp/Down move selection\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C jump to detail panels\nUp/Down move selection or scroll commandstats\n? toggle help overlay\nr refresh now\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview or commandstats";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1085,9 +1188,9 @@ mod tests {
     };
 
     use super::{
-        Align, background_color, carat_color, cluster_color_for_token, compute_column_widths,
-        detail_tab_index_for_shortcut, detail_tabs_widget, draw, fit_cell_text,
-        format_aligned_rows, format_with_commas, help_bindings, is_quit_key,
+        Align, background_color, carat_color, cluster_color_for_token, commandstats_page_len,
+        compute_column_widths, detail_tab_index_for_shortcut, detail_tabs_widget, draw,
+        fit_cell_text, format_aligned_rows, format_with_commas, help_bindings, is_quit_key,
     };
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
@@ -1404,6 +1507,88 @@ mod tests {
             lrange_row < echo_row,
             "rows should be sorted by calls descending"
         );
+    }
+
+    #[test]
+    fn detail_commandstats_tab_filters_rows_and_shows_filter_in_title() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 3;
+        app.commandstats_view.filter = "ran".into();
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.commandstats = vec![
+            CommandStat {
+                command: "echo".into(),
+                calls: 2_057,
+                usec: 49_361_425,
+                usec_per_call: 23_996.80,
+            },
+            CommandStat {
+                command: "lrange".into(),
+                calls: 400_000,
+                usec: 6_420_146,
+                usec_per_call: 16.05,
+            },
+        ];
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 16);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("filter=/ran")));
+        assert!(lines.iter().any(|line| line.contains("lrange")));
+        assert!(!lines.iter().any(|line| line.contains("echo")));
+    }
+
+    #[test]
+    fn detail_commandstats_tab_pages_rows_with_scroll_offset() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 3;
+        app.commandstats_view.scroll_offset = 2;
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.commandstats = (0..8)
+            .map(|idx| CommandStat {
+                command: format!("cmd{idx}"),
+                calls: u64::try_from(100 - idx).expect("non-negative"),
+                usec: 10,
+                usec_per_call: 1.0,
+            })
+            .collect();
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 18);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Commandstats 3-6 / 8"))
+        );
+        assert!(!lines.iter().any(|line| line.contains("cmd0")));
+        assert!(!lines.iter().any(|line| line.contains("cmd1")));
+        assert!(lines.iter().any(|line| line.contains("cmd2")));
+        assert!(lines.iter().any(|line| line.contains("cmd5")));
+        assert!(!lines.iter().any(|line| line.contains("cmd6")));
+        assert_eq!(commandstats_page_len(10), 4);
     }
 
     #[test]
