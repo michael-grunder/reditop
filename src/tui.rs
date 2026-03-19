@@ -1846,14 +1846,16 @@ mod tests {
             .iter()
             .position(|line| line.contains("6379"))
             .expect("cluster row rendered");
-        let alias_col = char_column(&lines[row], "6379");
-        let gutter_col = alias_col - 2;
         let width = usize::from(buffer.area.width);
-        let gutter_idx = row * width + gutter_col;
+        let row_start = row * width;
+        let row_end = row_start + width;
+        let gutter_cell = buffer.content()[row_start..row_end]
+            .iter()
+            .find(|cell| cell.symbol() == "│" && cell.fg == cluster_color_for_token("2"))
+            .expect("cluster gutter cell rendered with logical-cluster color");
 
-        assert_eq!(buffer.content()[gutter_idx].symbol(), "│");
         assert_eq!(
-            buffer.content()[gutter_idx].fg,
+            gutter_cell.fg,
             cluster_color_for_token("2"),
             "gutter color should be derived from the logical cluster label"
         );

@@ -81,6 +81,7 @@ pub struct AppState {
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
     pub column_registry: ColumnRegistry,
+    pub runtime_overview_column_order: Vec<String>,
     pub runtime_visible_overview: Vec<String>,
 }
 
@@ -114,6 +115,7 @@ impl AppState {
             force_show_host: false,
             instances: HashMap::new(),
             should_quit: false,
+            runtime_overview_column_order: column_registry.available_overview_columns(),
             runtime_visible_overview: column_registry.default_visible_overview_columns(),
             column_registry,
         }
@@ -289,8 +291,13 @@ impl AppState {
     }
 
     pub fn visible_column_keys(&self) -> Vec<String> {
-        self.runtime_visible_overview
+        self.runtime_overview_column_order
             .iter()
+            .filter(|key| {
+                self.runtime_visible_overview
+                    .iter()
+                    .any(|visible| visible == *key)
+            })
             .filter(|key| self.column_registry.column(key).is_some())
             .filter(|key| self.show_address_column() || key.as_str() != "addr")
             .cloned()
@@ -310,24 +317,11 @@ impl AppState {
     }
 
     pub fn available_overview_columns(&self) -> Vec<String> {
-        let registry_columns = self.column_registry.available_overview_columns();
-        let mut ordered = Vec::with_capacity(registry_columns.len());
-
-        for key in &self.runtime_visible_overview {
-            if registry_columns.iter().any(|candidate| candidate == key)
-                && !ordered.iter().any(|existing| existing == key)
-            {
-                ordered.push(key.clone());
-            }
-        }
-
-        for key in registry_columns {
-            if !ordered.iter().any(|existing| existing == &key) {
-                ordered.push(key);
-            }
-        }
-
-        ordered
+        self.runtime_overview_column_order
+            .iter()
+            .filter(|key| self.column_registry.column(key).is_some())
+            .cloned()
+            .collect()
     }
 
     pub fn sort_label(&self) -> String {
@@ -415,25 +409,39 @@ impl AppState {
         let Some(chosen_key) = columns.get(self.column_picker_index).cloned() else {
             return;
         };
-        let Some(current_idx) = self
-            .runtime_visible_overview
+        let visible_columns = self.visible_column_keys();
+        let Some(current_visible_idx) = visible_columns.iter().position(|key| key == &chosen_key)
+        else {
+            return;
+        };
+
+        let current = isize::try_from(current_visible_idx).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(visible_columns.len() - 1).unwrap_or(0);
+        let next = (current + delta).clamp(0, max_index);
+        let next_visible_idx = usize::try_from(next).unwrap_or(current_visible_idx);
+        if next_visible_idx == current_visible_idx {
+            return;
+        }
+
+        let Some(chosen_order_idx) = self
+            .runtime_overview_column_order
             .iter()
             .position(|key| key == &chosen_key)
         else {
             return;
         };
-
-        let current = isize::try_from(current_idx).unwrap_or(isize::MAX);
-        let max_index = isize::try_from(self.runtime_visible_overview.len() - 1).unwrap_or(0);
-        let next = (current + delta).clamp(0, max_index);
-        let next = usize::try_from(next).unwrap_or(current_idx);
-        if next == current_idx {
+        let swap_key = &visible_columns[next_visible_idx];
+        let Some(swap_order_idx) = self
+            .runtime_overview_column_order
+            .iter()
+            .position(|key| key == swap_key)
+        else {
             return;
-        }
+        };
 
-        let moved = self.runtime_visible_overview.remove(current_idx);
-        self.runtime_visible_overview.insert(next, moved);
-        self.column_picker_index = next;
+        self.runtime_overview_column_order
+            .swap(chosen_order_idx, swap_order_idx);
+        self.column_picker_index = swap_order_idx;
     }
 
     pub fn toggle_selected_column_visibility(&mut self) {
@@ -749,10 +757,28 @@ impl AppState {
     }
 
     fn normalize_runtime_visible_columns(&mut self) {
-        let available = self.available_overview_columns();
+        let registry_columns = self.column_registry.available_overview_columns();
+        let mut ordered = Vec::with_capacity(registry_columns.len());
+        for key in &self.runtime_overview_column_order {
+            if registry_columns.iter().any(|candidate| candidate == key)
+                && !ordered.iter().any(|existing| existing == key)
+            {
+                ordered.push(key.clone());
+            }
+        }
+        for key in &registry_columns {
+            if !ordered.iter().any(|existing| existing == key) {
+                ordered.push(key.clone());
+            }
+        }
+        self.runtime_overview_column_order = ordered;
+
         let mut deduped = Vec::with_capacity(self.runtime_visible_overview.len());
         for key in &self.runtime_visible_overview {
-            if available.iter().any(|candidate| candidate == key)
+            if self
+                .runtime_overview_column_order
+                .iter()
+                .any(|candidate| candidate == key)
                 && !deduped.iter().any(|existing| existing == key)
             {
                 deduped.push(key.clone());
@@ -1071,6 +1097,11 @@ mod tests {
     fn available_overview_columns_keep_visible_columns_first_in_runtime_order() {
         let mut app = app();
         app.runtime_visible_overview = vec!["ops".to_string(), "alias".to_string()];
+        app.runtime_overview_column_order = vec![
+            "ops".to_string(),
+            "alias".to_string(),
+            "cluster".to_string(),
+        ];
 
         let columns = app.available_overview_columns();
 
@@ -1144,6 +1175,8 @@ mod tests {
     #[test]
     fn moving_selected_visible_column_reorders_runtime_columns() {
         let mut app = app();
+        app.runtime_overview_column_order =
+            vec!["alias".to_string(), "ops".to_string(), "status".to_string()];
         app.runtime_visible_overview =
             vec!["alias".to_string(), "ops".to_string(), "status".to_string()];
         app.open_column_picker();
@@ -1152,7 +1185,7 @@ mod tests {
         app.move_selected_visible_column(1);
 
         assert_eq!(
-            app.runtime_visible_overview,
+            app.runtime_overview_column_order,
             vec!["alias".to_string(), "status".to_string(), "ops".to_string()]
         );
         assert_eq!(app.column_picker_index, 2);
@@ -1161,6 +1194,11 @@ mod tests {
     #[test]
     fn moving_hidden_column_does_not_change_runtime_order() {
         let mut app = app();
+        app.runtime_overview_column_order = vec![
+            "alias".to_string(),
+            "ops".to_string(),
+            "cluster".to_string(),
+        ];
         app.runtime_visible_overview = vec!["alias".to_string(), "ops".to_string()];
         app.open_column_picker();
         app.column_picker_index = app
@@ -1172,9 +1210,108 @@ mod tests {
         app.move_selected_visible_column(-1);
 
         assert_eq!(
-            app.runtime_visible_overview,
-            vec!["alias".to_string(), "ops".to_string()]
+            app.runtime_overview_column_order,
+            vec![
+                "alias".to_string(),
+                "ops".to_string(),
+                "cluster".to_string(),
+            ]
         );
+    }
+
+    #[test]
+    fn toggling_column_visibility_keeps_picker_order_stable() {
+        let mut app = app();
+        app.runtime_overview_column_order = vec![
+            "alias".to_string(),
+            "ops".to_string(),
+            "cluster".to_string(),
+            "status".to_string(),
+        ];
+        app.runtime_visible_overview = vec![
+            "alias".to_string(),
+            "ops".to_string(),
+            "cluster".to_string(),
+            "status".to_string(),
+        ];
+        app.open_column_picker();
+        app.column_picker_index = 1;
+        let initial_columns = app.available_overview_columns();
+        let initial_ops_index = initial_columns
+            .iter()
+            .position(|key| key == "ops")
+            .unwrap_or(0);
+
+        app.toggle_selected_column_visibility();
+
+        let hidden_columns = app.available_overview_columns();
+        let hidden_ops_index = hidden_columns
+            .iter()
+            .position(|key| key == "ops")
+            .unwrap_or(0);
+        assert_eq!(hidden_ops_index, initial_ops_index);
+        assert_eq!(
+            app.visible_column_keys(),
+            vec![
+                "alias".to_string(),
+                "cluster".to_string(),
+                "status".to_string(),
+            ]
+        );
+
+        app.toggle_selected_column_visibility();
+
+        let restored_columns = app.available_overview_columns();
+        let restored_ops_index = restored_columns
+            .iter()
+            .position(|key| key == "ops")
+            .unwrap_or(0);
+        assert_eq!(restored_ops_index, initial_ops_index);
+        assert_eq!(
+            app.visible_column_keys(),
+            vec![
+                "alias".to_string(),
+                "ops".to_string(),
+                "cluster".to_string(),
+                "status".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn moving_visible_column_preserves_hidden_column_position() {
+        let mut app = app();
+        app.runtime_overview_column_order = vec![
+            "alias".to_string(),
+            "cluster".to_string(),
+            "ops".to_string(),
+            "status".to_string(),
+        ];
+        app.runtime_visible_overview =
+            vec!["alias".to_string(), "ops".to_string(), "status".to_string()];
+        app.open_column_picker();
+        app.column_picker_index = app
+            .available_overview_columns()
+            .iter()
+            .position(|key| key == "ops")
+            .unwrap_or(0);
+
+        app.move_selected_visible_column(-1);
+
+        assert_eq!(
+            app.runtime_overview_column_order,
+            vec![
+                "ops".to_string(),
+                "cluster".to_string(),
+                "alias".to_string(),
+                "status".to_string(),
+            ]
+        );
+        assert_eq!(
+            app.visible_column_keys(),
+            vec!["ops".to_string(), "alias".to_string(), "status".to_string()]
+        );
+        assert_eq!(app.column_picker_index, 0);
     }
 
     #[test]

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Bigkeys` memory cells now show a single human-readable `MEMORY USAGE` value instead of `raw bytes (humanized)` so the column meaning is obvious at a glance.
 
 ### Fixed
+- F7 overview column visibility toggles now preserve each column's picker position; columns only move when explicitly reordered with `Shift+Up` / `Shift+Down`.
 - `Bigkeys` detail view now supports `/` filtering like other list views, including filtered row counts, scrolling, and status-bar prompt text.
 - Updated Redis connection timeout configuration and I/O error classification for compatibility with newer `redis` crate releases.
 - Reduced current Clippy warning noise with targeted lint fixes and narrower numeric conversion helpers, while preserving existing TUI/config behavior.
