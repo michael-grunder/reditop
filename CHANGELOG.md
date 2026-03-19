@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an initial GitHub Actions CI workflow that runs `cargo fmt --check`, `cargo test`, and `cargo clippy --all-targets --all-features -- -D warnings`, then uploads release artifacts for `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`.
 - Added `/` filtering for the detail `Commandstats` tab so operators can narrow the list to matching command names inline.
 - Added an on-demand `Bigkeys` detail tab that scans the selected server like `redis-cli --bigkeys`, reports the largest keys found by type-specific size commands, and includes `MEMORY USAGE` estimates when the target supports that command.
+- Added an initial live Redis integration test suite covering standalone polling, cluster discovery, and read-only `Bigkeys` scans, with configurable endpoints via `REDITOP_TEST_REDIS_ADDR` and `REDITOP_TEST_REDIS_CLUSTER_ADDR`.
 
 ### Changed
 - Right-align the numeric `Commandstats` columns and headers so call and timing values stay justified in the detail table.
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overview emphasis styling is no longer hard-wired to underline, and can now be configured from TOML without changing the winner-selection rule.
 - Detail `Commandstats` now fetches `INFO COMMANDSTATS` explicitly, so instances that omit that section from plain `INFO` still populate the tab correctly.
 - `Bigkeys` scans now enable `READONLY` on cluster replica connections so on-demand scans work against discovered cluster replicas instead of failing on redirected reads.
+- `Bigkeys` command support detection now uses `MEMORY HELP` instead of probing a synthetic key, avoiding cluster `MOVED` replies before a scan begins.
 
 ### Added
 - Implemented a working Redis/Valkey TUI with overview/detail/help screens.

@@ -133,6 +133,31 @@ Output binary:
 target/aarch64-apple-darwin/release/reditop
 ```
 
+## Testing
+
+Run the full test suite with:
+
+```bash
+cargo test
+```
+
+The integration suite includes live, read-only Redis checks for both a
+standalone instance and a Redis Cluster. By default it probes:
+
+- standalone Redis at `localhost:6379`
+- cluster Redis at `localhost:7000`
+
+Override those endpoints with:
+
+```bash
+REDITOP_TEST_REDIS_ADDR=redis.example:6379 \
+REDITOP_TEST_REDIS_CLUSTER_ADDR=redis-cluster.example:7000 \
+cargo test
+```
+
+If a live endpoint is unreachable, the corresponding integration test exits
+early and the rest of the suite still runs.
+
 ## Config
 
 Search order when `--config` is not provided:

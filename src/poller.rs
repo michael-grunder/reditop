@@ -415,9 +415,8 @@ async fn detect_memory_usage_support(
     conn: &mut impl redis::aio::ConnectionLike,
 ) -> redis::RedisResult<bool> {
     match redis::cmd("MEMORY")
-        .arg("USAGE")
-        .arg("__reditop_bigkeys_probe__")
-        .query_async::<Option<u64>>(conn)
+        .arg("HELP")
+        .query_async::<Value>(conn)
         .await
     {
         Ok(_) => Ok(true),

@@ -1,0 +1,21 @@
+#![warn(clippy::all, clippy::nursery, clippy::pedantic)]
+#![allow(
+    clippy::implicit_hasher,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use
+)]
+
+pub mod app;
+pub mod cli;
+pub mod cluster;
+pub mod column;
+pub mod columns;
+pub mod config;
+pub mod model;
+pub mod parse;
+pub mod poller;
+pub mod registry;
+pub mod target_addr;
+pub mod topology;
+pub mod tui;
