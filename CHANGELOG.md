@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 ### Added
 - Added an in-app overview column picker (`F7` or `v`) so operators can toggle visible overview columns on and off while the TUI is running.
+- Added visible-column reordering in the overview column picker via `Shift+Up` / `Shift+Down`, with picker rows reflecting the active overview column order.
 - Added an initial GitHub Actions CI workflow that runs `cargo fmt --check`, `cargo test`, and `cargo clippy --all-targets --all-features -- -D warnings`, then uploads release artifacts for `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`.
 - Added `/` filtering for the detail `Commandstats` tab so operators can narrow the list to matching command names inline.
 - Added an on-demand `Bigkeys` detail tab that scans the selected server like `redis-cli --bigkeys`, reports the largest keys found by type-specific size commands, and includes `MEMORY USAGE` estimates when the target supports that command.

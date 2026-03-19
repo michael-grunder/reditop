@@ -66,6 +66,7 @@ pub struct AppState {
     pub overview_modal: OverviewModal,
     pub sort_picker_index: usize,
     pub column_picker_index: usize,
+    pub column_picker_reorder_mode: bool,
     pub filter: String,
     pub is_filtering: bool,
     pub filter_prompt_mode: FilterPromptMode,
@@ -98,6 +99,7 @@ impl AppState {
             overview_modal: OverviewModal::None,
             sort_picker_index: 0,
             column_picker_index: 0,
+            column_picker_reorder_mode: false,
             settings,
             filter: String::new(),
             is_filtering: false,
@@ -308,7 +310,24 @@ impl AppState {
     }
 
     pub fn available_overview_columns(&self) -> Vec<String> {
-        self.column_registry.available_overview_columns()
+        let registry_columns = self.column_registry.available_overview_columns();
+        let mut ordered = Vec::with_capacity(registry_columns.len());
+
+        for key in &self.runtime_visible_overview {
+            if registry_columns.iter().any(|candidate| candidate == key)
+                && !ordered.iter().any(|existing| existing == key)
+            {
+                ordered.push(key.clone());
+            }
+        }
+
+        for key in registry_columns {
+            if !ordered.iter().any(|existing| existing == &key) {
+                ordered.push(key);
+            }
+        }
+
+        ordered
     }
 
     pub fn sort_label(&self) -> String {
@@ -337,10 +356,12 @@ impl AppState {
                     .any(|visible| visible == key)
             })
             .unwrap_or(0);
+        self.column_picker_reorder_mode = false;
         self.overview_modal = OverviewModal::ColumnPicker;
     }
 
     pub const fn close_overview_modal(&mut self) {
+        self.column_picker_reorder_mode = false;
         self.overview_modal = OverviewModal::None;
     }
 
@@ -383,6 +404,36 @@ impl AppState {
         let max_index = isize::try_from(columns.len() - 1).unwrap_or(isize::MAX);
         let next = (current + delta).clamp(0, max_index);
         self.column_picker_index = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub fn set_column_picker_reorder_mode(&mut self, enabled: bool) {
+        self.column_picker_reorder_mode = enabled && self.is_column_picker_open();
+    }
+
+    pub fn move_selected_visible_column(&mut self, delta: isize) {
+        let columns = self.available_overview_columns();
+        let Some(chosen_key) = columns.get(self.column_picker_index).cloned() else {
+            return;
+        };
+        let Some(current_idx) = self
+            .runtime_visible_overview
+            .iter()
+            .position(|key| key == &chosen_key)
+        else {
+            return;
+        };
+
+        let current = isize::try_from(current_idx).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(self.runtime_visible_overview.len() - 1).unwrap_or(0);
+        let next = (current + delta).clamp(0, max_index);
+        let next = usize::try_from(next).unwrap_or(current_idx);
+        if next == current_idx {
+            return;
+        }
+
+        let moved = self.runtime_visible_overview.remove(current_idx);
+        self.runtime_visible_overview.insert(next, moved);
+        self.column_picker_index = next;
     }
 
     pub fn toggle_selected_column_visibility(&mut self) {
@@ -699,15 +750,10 @@ impl AppState {
 
     fn normalize_runtime_visible_columns(&mut self) {
         let available = self.available_overview_columns();
-        self.runtime_visible_overview
-            .retain(|key| available.iter().any(|candidate| candidate == key));
-
         let mut deduped = Vec::with_capacity(self.runtime_visible_overview.len());
-        for key in &available {
-            if self
-                .runtime_visible_overview
-                .iter()
-                .any(|visible| visible == key)
+        for key in &self.runtime_visible_overview {
+            if available.iter().any(|candidate| candidate == key)
+                && !deduped.iter().any(|existing| existing == key)
             {
                 deduped.push(key.clone());
             }
@@ -1022,6 +1068,18 @@ mod tests {
     }
 
     #[test]
+    fn available_overview_columns_keep_visible_columns_first_in_runtime_order() {
+        let mut app = app();
+        app.runtime_visible_overview = vec!["ops".to_string(), "alias".to_string()];
+
+        let columns = app.available_overview_columns();
+
+        assert_eq!(columns.first().map(String::as_str), Some("ops"));
+        assert_eq!(columns.get(1).map(String::as_str), Some("alias"));
+        assert!(columns.iter().any(|key| key == "cluster"));
+    }
+
+    #[test]
     fn hiding_active_sort_column_moves_sort_to_next_visible_column() {
         let mut app = app();
         app.sort_by = "ops".to_string();
@@ -1081,6 +1139,42 @@ mod tests {
             vec!["alias".to_string(), "addr".to_string()]
         );
         assert_eq!(app.visible_column_keys(), vec!["alias".to_string()]);
+    }
+
+    #[test]
+    fn moving_selected_visible_column_reorders_runtime_columns() {
+        let mut app = app();
+        app.runtime_visible_overview =
+            vec!["alias".to_string(), "ops".to_string(), "status".to_string()];
+        app.open_column_picker();
+        app.column_picker_index = 1;
+
+        app.move_selected_visible_column(1);
+
+        assert_eq!(
+            app.runtime_visible_overview,
+            vec!["alias".to_string(), "status".to_string(), "ops".to_string()]
+        );
+        assert_eq!(app.column_picker_index, 2);
+    }
+
+    #[test]
+    fn moving_hidden_column_does_not_change_runtime_order() {
+        let mut app = app();
+        app.runtime_visible_overview = vec!["alias".to_string(), "ops".to_string()];
+        app.open_column_picker();
+        app.column_picker_index = app
+            .available_overview_columns()
+            .iter()
+            .position(|key| key == "cluster")
+            .unwrap_or(0);
+
+        app.move_selected_visible_column(-1);
+
+        assert_eq!(
+            app.runtime_visible_overview,
+            vec!["alias".to_string(), "ops".to_string()]
+        );
     }
 
     #[test]

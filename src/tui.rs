@@ -3,7 +3,9 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -92,6 +94,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
             let Event::Key(key) = event::read()? else {
                 continue;
             };
+            if app.is_column_picker_open() && key.kind == KeyEventKind::Release {
+                if shift_modifier_key(key.code) {
+                    app.set_column_picker_reorder_mode(false);
+                }
+                continue;
+            }
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -175,8 +183,27 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
             if app.is_column_picker_open() {
                 match key.code {
                     KeyCode::Esc => app.close_overview_modal(),
-                    KeyCode::Up => app.move_column_picker_selection(-1),
-                    KeyCode::Down => app.move_column_picker_selection(1),
+                    KeyCode::Modifier(modifier) if is_shift_modifier(modifier) => {
+                        app.set_column_picker_reorder_mode(true);
+                    }
+                    KeyCode::Up => {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            app.set_column_picker_reorder_mode(true);
+                            app.move_selected_visible_column(-1);
+                        } else {
+                            app.set_column_picker_reorder_mode(false);
+                            app.move_column_picker_selection(-1);
+                        }
+                    }
+                    KeyCode::Down => {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            app.set_column_picker_reorder_mode(true);
+                            app.move_selected_visible_column(1);
+                        } else {
+                            app.set_column_picker_reorder_mode(false);
+                            app.move_column_picker_selection(1);
+                        }
+                    }
                     KeyCode::Enter | KeyCode::Char(' ') => app.toggle_selected_column_visibility(),
                     _ => {}
                 }
@@ -196,9 +223,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::Char('s') if app.active_view == ActiveView::Overview => {
                     app.cycle_sort_mode();
                 }
-                KeyCode::F(7) | KeyCode::Char('v')
-                    if app.active_view == ActiveView::Overview =>
-                {
+                KeyCode::F(7) | KeyCode::Char('v') if app.active_view == ActiveView::Overview => {
                     app.open_column_picker();
                 }
                 KeyCode::Char('h') if app.active_view == ActiveView::Overview => {
@@ -1352,10 +1377,17 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ),
         ("F5", "Toggle flat/tree view in overview"),
         ("F6", "Choose sort column in overview"),
-        ("F7", "Toggle visible overview columns"),
+        (
+            "F7",
+            "Toggle visible overview columns and reorder visible ones",
+        ),
         ("t", "Toggle flat/tree view in overview"),
         ("s", "Cycle sort column in overview"),
         ("v", "Open overview column picker"),
+        (
+            "Shift+Up/Down",
+            "Reorder visible columns inside the column picker",
+        ),
         (
             "h",
             "Toggle host rendering (auto hide when all hosts are the same)",
@@ -1379,7 +1411,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1493,7 +1525,7 @@ fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Columns (Enter/Space toggle, Esc close)")
+                .title(column_picker_title(app))
                 .style(base_style(app)),
         )
         .style(base_style(app))
@@ -1503,12 +1535,50 @@ fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState
                 .bg(background_color(app))
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol(column_picker_highlight_symbol(app));
     let mut state =
         ratatui::widgets::TableState::default().with_selected(Some(app.column_picker_index));
 
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(table, popup, &mut state);
+}
+
+const fn column_picker_title(app: &AppState) -> &'static str {
+    if app.column_picker_reorder_mode {
+        "Columns (Shift+Up/Down move, Enter/Space toggle, Esc close)"
+    } else {
+        "Columns (Enter/Space toggle, Shift+Up/Down move, Esc close)"
+    }
+}
+
+const fn column_picker_highlight_symbol(app: &AppState) -> &'static str {
+    if app.column_picker_reorder_mode {
+        "↕ "
+    } else {
+        "> "
+    }
+}
+
+const fn shift_modifier_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Modifier(
+            ModifierKeyCode::LeftShift
+                | ModifierKeyCode::RightShift
+                | ModifierKeyCode::IsoLevel3Shift
+                | ModifierKeyCode::IsoLevel5Shift
+        )
+    )
+}
+
+const fn is_shift_modifier(modifier: ModifierKeyCode) -> bool {
+    matches!(
+        modifier,
+        ModifierKeyCode::LeftShift
+            | ModifierKeyCode::RightShift
+            | ModifierKeyCode::IsoLevel3Shift
+            | ModifierKeyCode::IsoLevel5Shift
+    )
 }
 
 fn base_style(app: &AppState) -> Style {

@@ -23,7 +23,7 @@
 - `F4`: start filter input and clear existing filter (overview)
 - `F5`: toggle tree/flat (overview)
 - `F6`: open sort picker from currently visible overview columns
-- `F7`: open overview column picker
+- `F7`: open overview column picker for toggling and reordering visible columns
 - `H`: open full help page
 - `?`: toggle help
 - `Up/Down`: move selection in overview, or scroll/paginate `Commandstats` and `Bigkeys` in detail view
@@ -34,6 +34,7 @@
 - `t`: toggle tree/flat
 - `s`: cycle sort column
 - `v`: open overview column picker
+- `Shift+Up/Down`: reorder visible columns inside the overview column picker
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
 - `/`: start filter input in overview, or filter `Commandstats` or `Bigkeys` rows in detail view
 - `r` / `R`: refresh now, or rerun the on-demand `Bigkeys` scan while that tab is open
