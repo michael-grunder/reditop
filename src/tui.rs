@@ -161,12 +161,23 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
-            if app.is_sorting {
+            if app.is_sort_picker_open() {
                 match key.code {
-                    KeyCode::Esc => app.close_sort_picker(),
+                    KeyCode::Esc => app.close_overview_modal(),
                     KeyCode::Up => app.move_sort_picker_selection(-1),
                     KeyCode::Down => app.move_sort_picker_selection(1),
                     KeyCode::Enter => app.apply_sort_picker_selection(),
+                    _ => {}
+                }
+                continue;
+            }
+
+            if app.is_column_picker_open() {
+                match key.code {
+                    KeyCode::Esc => app.close_overview_modal(),
+                    KeyCode::Up => app.move_column_picker_selection(-1),
+                    KeyCode::Down => app.move_column_picker_selection(1),
+                    KeyCode::Enter | KeyCode::Char(' ') => app.toggle_selected_column_visibility(),
                     _ => {}
                 }
                 continue;
@@ -184,6 +195,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 }
                 KeyCode::Char('s') if app.active_view == ActiveView::Overview => {
                     app.cycle_sort_mode();
+                }
+                KeyCode::F(7) | KeyCode::Char('v')
+                    if app.active_view == ActiveView::Overview =>
+                {
+                    app.open_column_picker();
                 }
                 KeyCode::Char('h') if app.active_view == ActiveView::Overview => {
                     app.toggle_host_rendering();
@@ -404,8 +420,12 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     }
     draw_status_bar(frame, app, chunks[1]);
 
-    if app.is_sorting {
+    if app.is_sort_picker_open() {
         draw_sort_picker(frame, area, app);
+    }
+
+    if app.is_column_picker_open() {
+        draw_column_picker(frame, area, app);
     }
 
     if app.show_help {
@@ -1300,7 +1320,7 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(Paragraph::new(prompt).style(base_style(app)), lines[0]);
 
     frame.render_widget(
-        Paragraph::new("F1Help  F3Search  F4Filter  F5Tree  F6SortBy")
+        Paragraph::new("F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns")
             .style(base_style(app).add_modifier(Modifier::BOLD)),
         lines[1],
     );
@@ -1332,8 +1352,10 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ),
         ("F5", "Toggle flat/tree view in overview"),
         ("F6", "Choose sort column in overview"),
+        ("F7", "Toggle visible overview columns"),
         ("t", "Toggle flat/tree view in overview"),
         ("s", "Cycle sort column in overview"),
+        ("v", "Open overview column picker"),
         (
             "h",
             "Toggle host rendering (auto hide when all hosts are the same)",
@@ -1357,7 +1379,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
+    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1429,6 +1451,61 @@ fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) 
         .highlight_symbol("> ");
     let mut state =
         ratatui::widgets::TableState::default().with_selected(Some(app.sort_picker_index));
+
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(table, popup, &mut state);
+}
+
+fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
+    let width = area.width.saturating_mul(55) / 100;
+    let height = area.height.saturating_mul(60) / 100;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    let show_address = app.show_address_column();
+    let rows: Vec<Row<'_>> = app
+        .available_overview_columns()
+        .iter()
+        .map(|column_key| {
+            let checked = if app.is_column_visible(column_key) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            let label = app
+                .column_registry
+                .column(column_key)
+                .map_or_else(|| column_key.clone(), |column| column.header().to_string());
+            let suffix = if column_key == "addr" && !show_address {
+                " (auto hidden)"
+            } else if column_key == &app.sort_by {
+                " (sort)"
+            } else {
+                ""
+            };
+            Row::new(vec![Cell::from(format!("{checked} {label}{suffix}"))])
+        })
+        .collect();
+    let table = Table::new(rows, [Constraint::Percentage(100)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Columns (Enter/Space toggle, Esc close)")
+                .style(base_style(app)),
+        )
+        .style(base_style(app))
+        .row_highlight_style(
+            Style::default()
+                .fg(carat_color(app))
+                .bg(background_color(app))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    let mut state =
+        ratatui::widgets::TableState::default().with_selected(Some(app.column_picker_index));
 
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(table, popup, &mut state);

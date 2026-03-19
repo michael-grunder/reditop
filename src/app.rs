@@ -20,6 +20,13 @@ pub enum FilterPromptMode {
     Filter,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverviewModal {
+    None,
+    SortPicker,
+    ColumnPicker,
+}
+
 impl FilterPromptMode {
     pub const fn label(self) -> &'static str {
         match self {
@@ -56,8 +63,9 @@ pub struct AppState {
     pub view_mode: ViewMode,
     pub sort_by: String,
     pub sort_direction: SortDirection,
-    pub is_sorting: bool,
+    pub overview_modal: OverviewModal,
     pub sort_picker_index: usize,
+    pub column_picker_index: usize,
     pub filter: String,
     pub is_filtering: bool,
     pub filter_prompt_mode: FilterPromptMode,
@@ -72,6 +80,7 @@ pub struct AppState {
     pub instances: HashMap<String, InstanceState>,
     pub should_quit: bool,
     pub column_registry: ColumnRegistry,
+    pub runtime_visible_overview: Vec<String>,
 }
 
 struct TreeRenderCtx<'a> {
@@ -86,8 +95,9 @@ impl AppState {
             view_mode: settings.default_view,
             sort_by: column_registry.default_sort_by.clone(),
             sort_direction: column_registry.default_sort_direction,
-            is_sorting: false,
+            overview_modal: OverviewModal::None,
             sort_picker_index: 0,
+            column_picker_index: 0,
             settings,
             filter: String::new(),
             is_filtering: false,
@@ -102,6 +112,7 @@ impl AppState {
             force_show_host: false,
             instances: HashMap::new(),
             should_quit: false,
+            runtime_visible_overview: column_registry.default_visible_overview_columns(),
             column_registry,
         }
     }
@@ -276,8 +287,12 @@ impl AppState {
     }
 
     pub fn visible_column_keys(&self) -> Vec<String> {
-        self.column_registry
-            .visible_columns(self.show_address_column())
+        self.runtime_visible_overview
+            .iter()
+            .filter(|key| self.column_registry.column(key).is_some())
+            .filter(|key| self.show_address_column() || key.as_str() != "addr")
+            .cloned()
+            .collect()
     }
 
     pub fn show_address_column(&self) -> bool {
@@ -290,6 +305,10 @@ impl AppState {
 
     pub fn sortable_columns(&self) -> Vec<String> {
         self.visible_column_keys()
+    }
+
+    pub fn available_overview_columns(&self) -> Vec<String> {
+        self.column_registry.available_overview_columns()
     }
 
     pub fn sort_label(&self) -> String {
@@ -305,11 +324,24 @@ impl AppState {
             .iter()
             .position(|key| *key == self.sort_by)
             .unwrap_or(0);
-        self.is_sorting = true;
+        self.overview_modal = OverviewModal::SortPicker;
     }
 
-    pub const fn close_sort_picker(&mut self) {
-        self.is_sorting = false;
+    pub fn open_column_picker(&mut self) {
+        let columns = self.available_overview_columns();
+        self.column_picker_index = columns
+            .iter()
+            .position(|key| {
+                self.runtime_visible_overview
+                    .iter()
+                    .any(|visible| visible == key)
+            })
+            .unwrap_or(0);
+        self.overview_modal = OverviewModal::ColumnPicker;
+    }
+
+    pub const fn close_overview_modal(&mut self) {
+        self.overview_modal = OverviewModal::None;
     }
 
     pub fn move_sort_picker_selection(&mut self, delta: isize) {
@@ -328,7 +360,7 @@ impl AppState {
     pub fn apply_sort_picker_selection(&mut self) {
         let columns = self.sortable_columns();
         let Some(chosen_key) = columns.get(self.sort_picker_index).cloned() else {
-            self.is_sorting = false;
+            self.overview_modal = OverviewModal::None;
             return;
         };
         if self.sort_by == chosen_key {
@@ -337,7 +369,53 @@ impl AppState {
             self.sort_by = chosen_key;
             self.sort_direction = default_sort_direction_for_column(&self.sort_by);
         }
-        self.is_sorting = false;
+        self.overview_modal = OverviewModal::None;
+        self.clamp_selection();
+    }
+
+    pub fn move_column_picker_selection(&mut self, delta: isize) {
+        let columns = self.available_overview_columns();
+        if columns.is_empty() {
+            self.column_picker_index = 0;
+            return;
+        }
+        let current = isize::try_from(self.column_picker_index).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(columns.len() - 1).unwrap_or(isize::MAX);
+        let next = (current + delta).clamp(0, max_index);
+        self.column_picker_index = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub fn toggle_selected_column_visibility(&mut self) {
+        let columns = self.available_overview_columns();
+        let Some(chosen_key) = columns.get(self.column_picker_index).cloned() else {
+            return;
+        };
+
+        if self
+            .runtime_visible_overview
+            .iter()
+            .any(|key| key == &chosen_key)
+        {
+            let next_visible = self
+                .runtime_visible_overview
+                .iter()
+                .filter(|key| key.as_str() != chosen_key)
+                .filter(|key| self.column_registry.column(key).is_some())
+                .filter(|key| self.show_address_column() || key.as_str() != "addr")
+                .count();
+            if next_visible == 0 {
+                return;
+            }
+            self.runtime_visible_overview
+                .retain(|key| key != &chosen_key);
+            self.ensure_sort_column_visible();
+            self.clamp_selection();
+            return;
+        }
+
+        self.runtime_visible_overview.push(chosen_key);
+        self.normalize_runtime_visible_columns();
+        self.ensure_sort_column_visible();
         self.clamp_selection();
     }
 
@@ -354,6 +432,20 @@ impl AppState {
         self.sort_by.clone_from(&columns[next_idx]);
         self.sort_direction = default_sort_direction_for_column(&self.sort_by);
         self.clamp_selection();
+    }
+
+    pub fn is_sort_picker_open(&self) -> bool {
+        self.overview_modal == OverviewModal::SortPicker
+    }
+
+    pub fn is_column_picker_open(&self) -> bool {
+        self.overview_modal == OverviewModal::ColumnPicker
+    }
+
+    pub fn is_column_visible(&self, column_key: &str) -> bool {
+        self.runtime_visible_overview
+            .iter()
+            .any(|key| key == column_key)
     }
 
     pub fn render_cell(&self, row: &DisplayRow, column_key: &str) -> Option<String> {
@@ -602,6 +694,39 @@ impl AppState {
             snap: node,
             omit_host: self.should_omit_host_in_rendering(),
             cluster_label: cluster_labels.get(&raw_cluster).map(String::as_str),
+        }
+    }
+
+    fn normalize_runtime_visible_columns(&mut self) {
+        let available = self.available_overview_columns();
+        self.runtime_visible_overview
+            .retain(|key| available.iter().any(|candidate| candidate == key));
+
+        let mut deduped = Vec::with_capacity(self.runtime_visible_overview.len());
+        for key in &available {
+            if self
+                .runtime_visible_overview
+                .iter()
+                .any(|visible| visible == key)
+            {
+                deduped.push(key.clone());
+            }
+        }
+        self.runtime_visible_overview = deduped;
+    }
+
+    fn ensure_sort_column_visible(&mut self) {
+        if self
+            .visible_column_keys()
+            .iter()
+            .any(|key| key == &self.sort_by)
+        {
+            return;
+        }
+
+        if let Some(next_sort) = self.visible_column_keys().into_iter().next() {
+            self.sort_by = next_sort;
+            self.sort_direction = default_sort_direction_for_column(&self.sort_by);
         }
     }
 }
@@ -885,6 +1010,77 @@ mod tests {
 
         assert_eq!(app.sort_by, "status");
         assert_eq!(app.sort_direction, SortDirection::Desc);
+    }
+
+    #[test]
+    fn column_picker_uses_all_available_columns() {
+        let app = app();
+        let columns = app.available_overview_columns();
+
+        assert!(columns.iter().any(|key| key == "alias"));
+        assert!(columns.iter().any(|key| key == "cluster"));
+    }
+
+    #[test]
+    fn hiding_active_sort_column_moves_sort_to_next_visible_column() {
+        let mut app = app();
+        app.sort_by = "ops".to_string();
+        app.sort_direction = SortDirection::Desc;
+        app.open_column_picker();
+        app.column_picker_index = app
+            .available_overview_columns()
+            .iter()
+            .position(|key| key == "ops")
+            .unwrap_or(0);
+
+        app.toggle_selected_column_visibility();
+
+        assert!(!app.is_column_visible("ops"));
+        assert_ne!(app.sort_by, "ops");
+        assert!(
+            app.visible_column_keys()
+                .iter()
+                .any(|key| key == &app.sort_by)
+        );
+    }
+
+    #[test]
+    fn column_picker_keeps_at_least_one_visible_column() {
+        let mut app = app();
+        app.runtime_visible_overview = vec!["alias".to_string()];
+        app.open_column_picker();
+        app.column_picker_index = app
+            .available_overview_columns()
+            .iter()
+            .position(|key| key == "alias")
+            .unwrap_or(0);
+
+        app.toggle_selected_column_visibility();
+
+        assert_eq!(app.runtime_visible_overview, vec!["alias".to_string()]);
+        assert_eq!(app.visible_column_keys(), vec!["alias".to_string()]);
+    }
+
+    #[test]
+    fn auto_hidden_address_column_does_not_count_as_last_visible_column() {
+        let mut app = app();
+        app.apply_update(InstanceState::new("a".into(), "127.0.0.1:6379".into()));
+        app.apply_update(InstanceState::new("b".into(), "127.0.0.1:6380".into()));
+        app.runtime_visible_overview = vec!["alias".to_string(), "addr".to_string()];
+        app.open_column_picker();
+        app.column_picker_index = app
+            .available_overview_columns()
+            .iter()
+            .position(|key| key == "alias")
+            .unwrap_or(0);
+
+        app.toggle_selected_column_visibility();
+
+        assert_eq!(
+            app.runtime_visible_overview,
+            vec!["alias".to_string(), "addr".to_string()]
+        );
+        assert_eq!(app.visible_column_keys(), vec!["alias".to_string()]);
     }
 
     #[test]

@@ -95,6 +95,18 @@ impl ColumnRegistry {
             .collect()
     }
 
+    pub fn available_overview_columns(&self) -> Vec<String> {
+        self.column_order
+            .iter()
+            .filter(|key| self.columns.contains_key(key.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    pub fn default_visible_overview_columns(&self) -> Vec<String> {
+        self.visible_overview.clone()
+    }
+
     pub const fn overview_emphasis_style(&self) -> EmphasisStyle {
         self.overview_emphasis_style
     }
