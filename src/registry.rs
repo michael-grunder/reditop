@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
+use indexmap::IndexMap;
 use serde::Deserialize;
 
 use crate::column::{Align, Column, Emphasis, EmphasisStyle, FormatSpec, ValueType, WidthHint};
@@ -192,7 +193,7 @@ fn resolve_config_path(explicit: Option<&Path>, no_default: bool) -> Option<Path
 
 #[derive(Debug, Deserialize, Default)]
 struct ColumnFileConfig {
-    columns: Option<HashMap<String, ColumnDef>>,
+    columns: Option<IndexMap<String, ColumnDef>>,
     view: Option<ViewConfig>,
 }
 
@@ -588,6 +589,21 @@ mod tests {
         assert!(registry.column("alias").is_some());
         assert!(registry.column("used_mem").is_some());
         assert!(registry.visible_overview.iter().any(|k| k == "alias"));
+        assert_eq!(
+            registry.available_overview_columns(),
+            vec![
+                "alias".to_string(),
+                "addr".to_string(),
+                "role".to_string(),
+                "cluster".to_string(),
+                "used_mem".to_string(),
+                "maxmem_pct".to_string(),
+                "ops".to_string(),
+                "lat_last".to_string(),
+                "lat_max".to_string(),
+                "status".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -648,5 +664,35 @@ foreground_color = "red"
             Some(UiColor::Red)
         );
         assert!(lat_max.emphasis_style().expect("lat max emphasis").italic);
+    }
+
+    #[test]
+    fn appends_new_user_columns_after_builtin_order() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+[columns.foo]
+type = "calc"
+header = "Foo"
+calc = "$alias"
+
+[columns.bar]
+type = "calc"
+header = "Bar"
+calc = "$addr"
+"#,
+        )
+        .expect("write config");
+
+        let registry = ColumnRegistry::load(Some(&path), false, SortMode::Address);
+        let columns = registry.available_overview_columns();
+
+        assert_eq!(
+            columns.get(columns.len().saturating_sub(2)),
+            Some(&"foo".to_string())
+        );
+        assert_eq!(columns.last(), Some(&"bar".to_string()));
     }
 }
