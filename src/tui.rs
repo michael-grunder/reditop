@@ -95,8 +95,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
             let Event::Key(key) = event::read()? else {
                 continue;
             };
-            if is_quit_key(key) {
+            if is_force_quit_key(key) {
                 app.should_quit = true;
+                continue;
+            }
+
+            if handle_overlay_quit_key(&mut app, key) {
                 continue;
             }
 
@@ -163,7 +167,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
 
             if app.is_sort_picker_open() {
                 match key.code {
-                    KeyCode::Esc => app.close_overview_modal(),
+                    KeyCode::Esc | KeyCode::Char('q') => app.close_overview_modal(),
                     KeyCode::Up => app.move_sort_picker_selection(-1),
                     KeyCode::Down => app.move_sort_picker_selection(1),
                     KeyCode::Enter => app.apply_sort_picker_selection(),
@@ -388,16 +392,37 @@ fn mark_bigkeys_running(app: &mut AppState, key: &str) {
     }
 }
 
-const fn is_quit_key(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('q'))
-        || matches!(
-            key,
-            KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL)
-        )
+const fn is_force_quit_key(key: KeyEvent) -> bool {
+    matches!(
+        key,
+        KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers,
+            ..
+        } if modifiers.contains(KeyModifiers::CONTROL)
+    )
+}
+
+fn handle_overlay_quit_key(app: &mut AppState, key: KeyEvent) -> bool {
+    if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+        return false;
+    }
+
+    if key.code != KeyCode::Char('q') {
+        return false;
+    }
+
+    if app.show_help {
+        app.show_help = false;
+        return true;
+    }
+
+    if app.is_sort_picker_open() || app.is_column_picker_open() {
+        app.close_overview_modal();
+        return true;
+    }
+
+    false
 }
 
 fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
@@ -1323,7 +1348,8 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
 const fn help_bindings() -> &'static [(&'static str, &'static str)] {
     &[
-        ("q / Ctrl+C", "Quit"),
+        ("q", "Quit, or close the active overlay"),
+        ("Ctrl+C", "Quit immediately"),
         ("F1", "Open full help page"),
         ("H", "Open this help page"),
         ("Esc", "Back from detail/help or stop filter editing"),
@@ -1381,7 +1407,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q or Ctrl+C quit\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1523,7 +1549,7 @@ fn handle_column_picker_key(app: &mut AppState, key: KeyEvent) -> bool {
         }
         KeyEventKind::Press | KeyEventKind::Repeat => {
             match key.code {
-                KeyCode::Esc => app.close_overview_modal(),
+                KeyCode::Esc | KeyCode::Char('q') => app.close_overview_modal(),
                 KeyCode::Modifier(modifier) if is_shift_modifier(modifier) => {
                     app.set_column_picker_reorder_mode(true);
                 }
@@ -1651,15 +1677,19 @@ mod tests {
         Align, background_color, bigkeys_age_title, carat_color, cluster_color_for_token,
         commandstats_page_len, compute_column_widths, detail_tab_index_for_shortcut,
         detail_tabs_widget, draw, fit_cell_text, format_aligned_rows, format_with_commas,
-        handle_column_picker_key, help_bindings, is_quit_key,
+        handle_column_picker_key, handle_overlay_quit_key, help_bindings, is_force_quit_key,
     };
-    use crate::app::AppState;
+    use crate::app::{AppState, OverviewModal};
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
     use crate::model::{
-        BigkeyEntry, BigkeysScanStatus, CommandStat, InstanceState, Status, ViewMode,
+        BigkeyEntry, BigkeysScanStatus, CommandStat, InstanceState, SortMode, Status, ViewMode,
     };
     use crate::registry::ColumnRegistry;
+
+    fn test_registry() -> ColumnRegistry {
+        ColumnRegistry::load(None, true, SortMode::Address)
+    }
 
     fn buffer_lines(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
         let width = usize::from(buffer.area.width);
@@ -1718,23 +1748,79 @@ mod tests {
     }
 
     #[test]
-    fn quit_key_matches_q_and_ctrl_c() {
-        assert!(is_quit_key(KeyEvent::new(
-            KeyCode::Char('q'),
-            KeyModifiers::NONE
-        )));
-        assert!(is_quit_key(KeyEvent::new(
+    fn force_quit_key_matches_ctrl_c() {
+        assert!(is_force_quit_key(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL,
         )));
     }
 
     #[test]
-    fn quit_key_does_not_match_plain_c() {
-        assert!(!is_quit_key(KeyEvent::new(
+    fn force_quit_key_does_not_match_plain_c_or_q() {
+        assert!(!is_force_quit_key(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::NONE,
         )));
+        assert!(!is_force_quit_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn q_closes_help_overlay_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.show_help = true;
+
+        let handled = handle_overlay_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(handled);
+        assert!(!app.show_help);
+    }
+
+    #[test]
+    fn q_closes_sort_picker_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::SortPicker;
+
+        let handled = handle_overlay_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(handled);
+        assert_eq!(app.overview_modal, OverviewModal::None);
+    }
+
+    #[test]
+    fn q_closes_column_picker_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::ColumnPicker;
+        app.column_picker_reorder_mode = true;
+
+        let handled = handle_overlay_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(handled);
+        assert_eq!(app.overview_modal, OverviewModal::None);
+        assert!(!app.column_picker_reorder_mode);
+    }
+
+    #[test]
+    fn q_without_overlay_is_not_handled_as_overlay_quit() {
+        let mut app = AppState::new(default_settings(), test_registry());
+
+        let handled = handle_overlay_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(!handled);
     }
 
     #[test]

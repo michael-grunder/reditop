@@ -17,7 +17,8 @@
 
 ## Key Bindings
 
-- `q` / `Ctrl+C`: quit
+- `q`: quit, or close the active overlay window
+- `Ctrl+C`: quit immediately
 - `F1`: open full help page
 - `F3`: start search input (overview)
 - `F4`: start filter input and clear existing filter (overview)
