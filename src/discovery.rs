@@ -217,21 +217,10 @@ impl DiscoveryStatus {
         }
     }
 
-    pub fn summary(&self) -> String {
+    pub fn footer_summary(&self) -> Option<String> {
         match self.phase {
-            DiscoveryPhase::Idle => "Discovery idle".to_string(),
-            DiscoveryPhase::Running => format!(
-                "{} Autodiscovering... {} candidates, {} queued, {} probing, {} verified",
-                self.spinner_frame(),
-                self.candidates_seen,
-                self.queued,
-                self.probing,
-                self.verified
-            ),
-            DiscoveryPhase::Complete => format!(
-                "Discovery complete: {} candidates, {} verified, {} failed",
-                self.candidates_seen, self.verified, self.failed
-            ),
+            DiscoveryPhase::Idle | DiscoveryPhase::Complete => None,
+            DiscoveryPhase::Running => Some(format!("{} Autodiscovering", self.spinner_frame())),
         }
     }
 
@@ -983,6 +972,19 @@ mod tests {
         assert_eq!(status.phase, DiscoveryPhase::Complete);
         assert_eq!(status.candidates_seen, 1);
         assert_eq!(status.duplicates, 1);
+        assert_eq!(status.footer_summary(), None);
+    }
+
+    #[test]
+    fn discovery_status_footer_summary_only_shows_while_running() {
+        let mut status = DiscoveryStatus::default();
+        assert_eq!(status.footer_summary(), None);
+
+        status.phase = DiscoveryPhase::Running;
+        let summary = status
+            .footer_summary()
+            .expect("running discovery should show footer text");
+        assert!(summary.contains("Autodiscovering"));
     }
 
     #[test]

@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Changed
+
+- Shorten the autodiscovery footer to a compact in-progress spinner label and
+  clear it automatically once discovery completes.
+
 ### Added
 
 - Add background Redis/Valkey autodiscovery with curated host port probing,
