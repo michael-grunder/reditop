@@ -21,6 +21,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs,
 use crate::app::{ActiveView, AppState, FilterPromptMode, OverviewModal};
 use crate::cli::LaunchConfig;
 use crate::column::{Align, EmphasisStyle};
+use crate::discovery::{self, DiscoveryEvent};
 use crate::poller::{self, PollerRequest};
 use crate::registry::ColumnRegistry;
 
@@ -76,11 +77,22 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
         launch.settings.default_sort,
     );
     let mut app = AppState::new(launch.settings.clone(), registry);
-    let (mut updates_rx, request_tx) = poller::start(launch.targets, launch.settings);
+    let (mut updates_rx, request_tx) =
+        poller::start(launch.targets.clone(), launch.settings.clone());
+    let mut discovery_rx =
+        discovery::start(launch.discovery_targets, launch.targets, launch.settings);
 
     loop {
         while let Ok(update) = updates_rx.try_recv() {
             app.apply_update(update);
+        }
+        while let Ok(event) = discovery_rx.try_recv() {
+            app.apply_discovery_event(&event);
+            if let DiscoveryEvent::VerificationSucceeded(verified) = event {
+                let target = verified.target.clone();
+                app.apply_verified_instance(*verified);
+                let _ = request_tx.try_send(PollerRequest::UpsertTarget(target));
+            }
         }
 
         maybe_request_bigkeys_scan(&mut app, &request_tx);
@@ -1361,9 +1373,12 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     };
     frame.render_widget(Paragraph::new(prompt).style(base_style(app)), lines[0]);
 
+    let footer = format!(
+        "{}  |  F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns",
+        app.discovery_status.summary()
+    );
     frame.render_widget(
-        Paragraph::new("F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns")
-            .style(base_style(app).add_modifier(Modifier::BOLD)),
+        Paragraph::new(footer).style(base_style(app).add_modifier(Modifier::BOLD)),
         lines[1],
     );
 }

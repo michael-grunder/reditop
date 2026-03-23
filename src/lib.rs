@@ -12,6 +12,7 @@ pub mod cluster;
 pub mod column;
 pub mod columns;
 pub mod config;
+pub mod discovery;
 pub mod model;
 pub mod parse;
 pub mod poller;

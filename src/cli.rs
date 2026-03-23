@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::{Parser, ValueEnum};
 
-use crate::cluster;
 use crate::config;
+use crate::discovery::DiscoveryTarget;
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
 use crate::target_addr::normalize_tcp_addr;
 
@@ -22,6 +22,7 @@ const VERSION: &str = concat!(
 pub struct LaunchConfig {
     pub settings: RuntimeSettings,
     pub targets: Vec<Target>,
+    pub discovery_targets: Vec<DiscoveryTarget>,
     pub verbose: bool,
     pub config_path: Option<PathBuf>,
     pub no_default_config: bool,
@@ -45,6 +46,9 @@ struct Cli {
 
     #[arg(long = "cluster", value_name = "HOST:PORT")]
     cluster_targets: Vec<String>,
+
+    #[arg(long = "host", value_name = "HOST")]
+    discovery_hosts: Vec<String>,
 
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
@@ -101,7 +105,7 @@ enum CliSortMode {
 }
 
 #[allow(clippy::too_many_lines)]
-pub async fn build_launch_config() -> Result<LaunchConfig> {
+pub fn build_launch_config() -> Result<LaunchConfig> {
     let args = Cli::parse();
 
     let base_settings = config::default_settings();
@@ -214,21 +218,20 @@ pub async fn build_launch_config() -> Result<LaunchConfig> {
         }
     }
 
-    if !parsed_cluster_seeds.is_empty() {
-        let discovered =
-            cluster::discover_cluster_targets(&parsed_cluster_seeds, &settings).await?;
-        merged_targets.extend(discovered);
-    }
+    merged_targets.extend(parsed_cluster_seeds);
 
     merged_targets = dedupe_targets(merged_targets);
-
-    if merged_targets.is_empty() {
-        bail!("no Redis targets provided (CLI/config)");
-    }
+    let discovery_targets = dedupe_discovery_targets(build_discovery_targets(
+        &merged_targets,
+        &args.discovery_hosts,
+        args.user.clone(),
+        args.auth.clone(),
+    ));
 
     Ok(LaunchConfig {
         settings,
         targets: merged_targets,
+        discovery_targets,
         verbose: args.verbose,
         config_path: args.config,
         no_default_config: args.no_config,
@@ -261,6 +264,72 @@ fn dedupe_targets(input: Vec<Target>) -> Vec<Target> {
     }
     let mut out: Vec<Target> = by_key.into_values().collect();
     out.sort_by(|a, b| a.addr.cmp(&b.addr));
+    out
+}
+
+fn build_discovery_targets(
+    explicit_targets: &[Target],
+    discovery_hosts: &[String],
+    username: Option<String>,
+    password: Option<String>,
+) -> Vec<DiscoveryTarget> {
+    let mut out = discovery_hosts
+        .iter()
+        .map(|host| DiscoveryTarget {
+            host: host.trim().to_string(),
+            username: username.clone(),
+            password: password.clone(),
+        })
+        .filter(|target| !target.host.is_empty())
+        .collect::<Vec<_>>();
+
+    out.extend(
+        explicit_targets
+            .iter()
+            .filter(|target| target.protocol == TargetProtocol::Tcp)
+            .filter_map(|target| {
+                crate::target_addr::tcp_host(&target.addr).map(|host| DiscoveryTarget {
+                    host,
+                    username: target.username.clone(),
+                    password: target.password.clone(),
+                })
+            }),
+    );
+
+    if out.is_empty() && explicit_targets.is_empty() {
+        out.push(DiscoveryTarget::localhost(username, password));
+    }
+
+    out
+}
+
+fn dedupe_discovery_targets(input: Vec<DiscoveryTarget>) -> Vec<DiscoveryTarget> {
+    let mut by_host: HashMap<String, DiscoveryTarget> = HashMap::new();
+    for target in input {
+        let localhost_probe = DiscoveryTarget {
+            host: target.host.clone(),
+            username: None,
+            password: None,
+        };
+        let key = if localhost_probe.is_localhost() {
+            "127.0.0.1".to_string()
+        } else {
+            target.host.to_ascii_lowercase()
+        };
+        by_host
+            .entry(key)
+            .and_modify(|existing| {
+                if existing.username.is_none() {
+                    existing.username.clone_from(&target.username);
+                }
+                if existing.password.is_none() {
+                    existing.password.clone_from(&target.password);
+                }
+            })
+            .or_insert(target);
+    }
+    let mut out: Vec<_> = by_host.into_values().collect();
+    out.sort_by(|left, right| left.host.cmp(&right.host));
     out
 }
 

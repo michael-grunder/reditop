@@ -5,6 +5,7 @@
 ## Implemented MVP
 
 - Polls one or more Redis targets every second (default, configurable)
+- Starts immediately and runs Redis/Valkey autodiscovery in the background
 - Overview screen with:
   - generic, configurable columns (INFO-backed + calculated)
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
@@ -12,6 +13,7 @@
 - Tree and flat overview modes
 - Sorting by currently visible column keys and substring filtering
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
+- Live discovery status in the footer, including queued/probing/verified counts
 - Config loading from TOML + CLI target merge
 - Handles per-instance failures without crashing UI
 
@@ -57,6 +59,9 @@ Examples:
 ```bash
 reditop 127.0.0.1:6379 127.0.0.1:6380
 reditop 6379 6380
+reditop
+reditop --host 192.168.0.148
+reditop --host 192.168.0.148 --host 192.168.0.149
 reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
 reditop --cluster 7000
 reditop --cluster 10.0.0.11:7000 --cluster 10.0.0.12:7000
@@ -67,12 +72,16 @@ reditop -c config.toml 127.0.0.1:6379
 For TCP targets, you can pass just a port (for example `6379`), and it is treated as
 `127.0.0.1:6379`.
 
-`--cluster <HOST:PORT>` uses the provided TCP seed node(s) to run `CLUSTER SHARDS`
-and auto-discover every primary/replica endpoint in the cluster for monitoring.
-Realtime cluster role/parent updates also use `CLUSTER SHARDS` (not deprecated
-`CLUSTER NODES`) so startup discovery and ongoing topology mapping stay aligned.
-Like `--tcp`, a port-only value such as `--cluster 7000` is treated as
-`127.0.0.1:7000`.
+If you do not provide explicit targets, `reditop` now autodiscovers on
+`127.0.0.1` by default. `--host <HOST>` switches autodiscovery to one or more
+remote hosts and probes only a curated Redis-focused port set instead of doing
+a full port scan.
+
+Explicit `--cluster <HOST:PORT>` values are treated as seed nodes: the TUI
+starts immediately, the seed is monitored right away, and the background
+discovery pipeline expands cluster, replication, and sentinel topology as it
+verifies peers. Like `--tcp`, a port-only value such as `--cluster 7000` is
+treated as `127.0.0.1:7000`.
 
 Important options:
 
@@ -81,6 +90,7 @@ Important options:
 - `--connect-timeout <DURATION>`
 - `--command-timeout <DURATION>`
 - `-n, --concurrency <N>`
+- `--host <HOST>`
 - `--cluster <HOST:PORT>`
 - `--view <flat|tree>`
 - `--sort <alias|address|type|cluster|memory|mem|ops|lat|latmax|status>`

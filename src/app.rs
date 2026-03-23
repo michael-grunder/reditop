@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::column::{Emphasis, RenderCtx, SortCtx, SortKey};
+use crate::discovery::{DiscoveryEvent, DiscoveryStatus, VerifiedInstance};
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortDirection, ViewMode};
 use crate::registry::ColumnRegistry;
 use crate::target_addr::canonical_host;
@@ -79,6 +80,7 @@ pub struct AppState {
     pub bigkeys_view: BigkeysViewState,
     pub force_show_host: bool,
     pub instances: HashMap<String, InstanceState>,
+    pub discovery_status: DiscoveryStatus,
     pub should_quit: bool,
     pub column_registry: ColumnRegistry,
     pub runtime_overview_column_order: Vec<String>,
@@ -114,6 +116,7 @@ impl AppState {
             bigkeys_view: BigkeysViewState::default(),
             force_show_host: false,
             instances: HashMap::new(),
+            discovery_status: DiscoveryStatus::default(),
             should_quit: false,
             runtime_overview_column_order: column_registry.available_overview_columns(),
             runtime_visible_overview: column_registry.default_visible_overview_columns(),
@@ -124,6 +127,14 @@ impl AppState {
     pub fn apply_update(&mut self, update: InstanceState) {
         self.instances.insert(update.key.clone(), update);
         self.clamp_selection();
+    }
+
+    pub fn apply_discovery_event(&mut self, event: &DiscoveryEvent) {
+        self.discovery_status.apply_event(event);
+    }
+
+    pub fn apply_verified_instance(&mut self, verified: VerifiedInstance) {
+        self.apply_update(verified.state);
     }
 
     pub fn selected_key(&self) -> Option<String> {

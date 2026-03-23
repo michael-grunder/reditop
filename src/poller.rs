@@ -18,6 +18,7 @@ const BIGKEYS_TOP_N: usize = 20;
 #[derive(Debug, Clone)]
 pub enum PollerRequest {
     RefreshAll,
+    UpsertTarget(Target),
     RefreshBigkeys { key: String, force: bool },
 }
 
@@ -31,6 +32,10 @@ pub fn start(
     tokio::spawn(async move {
         let semaphore = Arc::new(Semaphore::new(settings.concurrency_limit.max(1)));
         let mut known_states: HashMap<String, InstanceState> = HashMap::new();
+        let mut target_map: HashMap<String, Target> = targets
+            .into_iter()
+            .map(|target| (target.addr.clone(), target))
+            .collect();
         let mut ticker = tokio::time::interval(settings.refresh_interval);
 
         loop {
@@ -46,7 +51,7 @@ pub fn start(
             match request {
                 PollerRequest::RefreshAll => {
                     let mut set = tokio::task::JoinSet::new();
-                    for target in &targets {
+                    for target in target_map.values() {
                         let target = target.clone();
                         let settings = settings.clone();
                         let semaphore = semaphore.clone();
@@ -66,9 +71,25 @@ pub fn start(
                         }
                     }
                 }
+                PollerRequest::UpsertTarget(target) => {
+                    let key = target.addr.clone();
+                    let existing = target_map.insert(key.clone(), target.clone());
+                    if existing.is_some() {
+                        continue;
+                    }
+
+                    let updated = {
+                        let _permit = semaphore.clone().acquire_owned().await.ok();
+                        let prior = known_states.get(&key).cloned();
+                        poll_one(&target, &settings, prior).await
+                    };
+                    known_states.insert(updated.key.clone(), updated.clone());
+                    if update_tx.send(updated).await.is_err() {
+                        return;
+                    }
+                }
                 PollerRequest::RefreshBigkeys { key, force } => {
-                    let Some(target) = targets.iter().find(|candidate| candidate.addr == key)
-                    else {
+                    let Some(target) = target_map.get(&key) else {
                         continue;
                     };
                     let Some(prior) = known_states.get(&key).cloned() else {
@@ -238,7 +259,11 @@ async fn prepare_bigkeys_connection(
     Ok(())
 }
 
-fn apply_info_to_state(state: &mut InstanceState, info_raw: &str, commandstats_raw: Option<&str>) {
+pub(crate) fn apply_info_to_state(
+    state: &mut InstanceState,
+    info_raw: &str,
+    commandstats_raw: Option<&str>,
+) {
     let info = parse_info(info_raw);
     state.info = info.flat_map();
 
@@ -328,7 +353,7 @@ fn classify_error(error: &redis::RedisError) -> (Status, String) {
     }
 }
 
-fn redis_url(target: &Target) -> String {
+pub(crate) fn redis_url(target: &Target) -> String {
     match target.protocol {
         TargetProtocol::Tcp => {
             if let (Some(user), Some(pass)) = (&target.username, &target.password) {
@@ -541,7 +566,11 @@ fn truncate_string(input: String, max_chars: usize) -> String {
     input.chars().take(max_chars).collect()
 }
 
-fn apply_cluster_shards_to_state(state: &mut InstanceState, target: &Target, value: &Value) {
+pub(crate) fn apply_cluster_shards_to_state(
+    state: &mut InstanceState,
+    target: &Target,
+    value: &Value,
+) {
     let shards = parse_cluster_shards(value);
     if shards.is_empty() {
         return;

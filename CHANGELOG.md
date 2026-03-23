@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added
+
+- Add background Redis/Valkey autodiscovery with curated host port probing,
+  localhost socket/process hints, Redis verification, and live TUI updates.
+- Add `--host <HOST>` for remote autodiscovery, including repeated `--host`
+  usage for scanning multiple hosts in one session.
+
 ### Fixed
 
 - Make `q` close the active overlay window instead of exiting the TUI, while

@@ -22,6 +22,14 @@ pub fn canonical_host(addr: &str) -> Option<String> {
     Some(host.to_ascii_lowercase())
 }
 
+pub fn tcp_host(addr: &str) -> Option<String> {
+    if addr.contains('/') {
+        return None;
+    }
+
+    extract_host(addr).map(str::to_string)
+}
+
 pub fn strip_host(addr: &str) -> Option<String> {
     if addr.contains('/') {
         return None;
