@@ -34,6 +34,18 @@ min_width = 6
 ideal_width = 8
 max_width = 12
 
+[columns.connected_clients]
+type = "info"
+header = "Clients"
+info_key = "connected_clients"
+value_type = "u64"
+format = "raw"
+align = "right"
+min_width = 7
+ideal_width = 8
+max_width = 10
+missing = "-"
+
 [columns.used_mem]
 type = "info"
 header = "Mem"

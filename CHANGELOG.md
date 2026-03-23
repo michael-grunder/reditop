@@ -11,6 +11,8 @@
   localhost socket/process hints, Redis verification, and live TUI updates.
 - Add `--host <HOST>` for remote autodiscovery, including repeated `--host`
   usage for scanning multiple hosts in one session.
+- Add an available `connected_clients` overview column backed by Redis `INFO`
+  clients output.
 
 ### Fixed
 

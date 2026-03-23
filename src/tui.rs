@@ -1373,13 +1373,10 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     };
     frame.render_widget(Paragraph::new(prompt).style(base_style(app)), lines[0]);
 
-    let footer = match app.discovery_status.footer_summary() {
-        Some(summary) => format!(
-            "{}  |  F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns",
-            summary
-        ),
-        None => "F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns".to_string(),
-    };
+    let footer = app.discovery_status.footer_summary().map_or_else(
+        || "F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns".to_string(),
+        |summary| format!("{summary}  |  F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns"),
+    );
     frame.render_widget(
         Paragraph::new(footer).style(base_style(app).add_modifier(Modifier::BOLD)),
         lines[1],

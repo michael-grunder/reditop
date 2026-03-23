@@ -596,6 +596,7 @@ mod tests {
                 "addr".to_string(),
                 "role".to_string(),
                 "cluster".to_string(),
+                "connected_clients".to_string(),
                 "used_mem".to_string(),
                 "maxmem_pct".to_string(),
                 "ops".to_string(),
