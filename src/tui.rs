@@ -18,7 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
 
-use crate::app::{ActiveView, AppState, FilterPromptMode};
+use crate::app::{ActiveView, AppState, FilterPromptMode, OverviewModal};
 use crate::cli::LaunchConfig;
 use crate::column::{Align, EmphasisStyle};
 use crate::poller::{self, PollerRequest};
@@ -268,6 +268,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                         sync_detail_views(&mut app, terminal.size()?.height);
                     }
                 }
+                KeyCode::Char('q') | KeyCode::Esc
+                    if handle_primary_view_quit_key(&mut app, key) => {}
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
                     app.commandstats_view.is_filtering = false;
                     app.bigkeys_view.is_filtering = false;
@@ -408,7 +410,7 @@ fn handle_overlay_quit_key(app: &mut AppState, key: KeyEvent) -> bool {
         return false;
     }
 
-    if key.code != KeyCode::Char('q') {
+    if !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
         return false;
     }
 
@@ -423,6 +425,26 @@ fn handle_overlay_quit_key(app: &mut AppState, key: KeyEvent) -> bool {
     }
 
     false
+}
+
+fn handle_primary_view_quit_key(app: &mut AppState, key: KeyEvent) -> bool {
+    if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+        return false;
+    }
+
+    if !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+        return false;
+    }
+
+    if app.active_view != ActiveView::Overview
+        || app.show_help
+        || app.overview_modal != OverviewModal::None
+    {
+        return false;
+    }
+
+    app.should_quit = true;
+    true
 }
 
 fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
@@ -1677,9 +1699,10 @@ mod tests {
         Align, background_color, bigkeys_age_title, carat_color, cluster_color_for_token,
         commandstats_page_len, compute_column_widths, detail_tab_index_for_shortcut,
         detail_tabs_widget, draw, fit_cell_text, format_aligned_rows, format_with_commas,
-        handle_column_picker_key, handle_overlay_quit_key, help_bindings, is_force_quit_key,
+        handle_column_picker_key, handle_overlay_quit_key, handle_primary_view_quit_key,
+        help_bindings, is_force_quit_key,
     };
-    use crate::app::{AppState, OverviewModal};
+    use crate::app::{ActiveView, AppState, OverviewModal};
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
     use crate::model::{
@@ -1782,6 +1805,18 @@ mod tests {
     }
 
     #[test]
+    fn esc_closes_help_overlay_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.show_help = true;
+
+        let handled =
+            handle_overlay_quit_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(handled);
+        assert!(!app.show_help);
+    }
+
+    #[test]
     fn q_closes_sort_picker_instead_of_quitting() {
         let mut app = AppState::new(default_settings(), test_registry());
         app.overview_modal = OverviewModal::SortPicker;
@@ -1790,6 +1825,18 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         );
+
+        assert!(handled);
+        assert_eq!(app.overview_modal, OverviewModal::None);
+    }
+
+    #[test]
+    fn esc_closes_sort_picker_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::SortPicker;
+
+        let handled =
+            handle_overlay_quit_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         assert!(handled);
         assert_eq!(app.overview_modal, OverviewModal::None);
@@ -1812,6 +1859,20 @@ mod tests {
     }
 
     #[test]
+    fn esc_closes_column_picker_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::ColumnPicker;
+        app.column_picker_reorder_mode = true;
+
+        let handled =
+            handle_overlay_quit_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(handled);
+        assert_eq!(app.overview_modal, OverviewModal::None);
+        assert!(!app.column_picker_reorder_mode);
+    }
+
+    #[test]
     fn q_without_overlay_is_not_handled_as_overlay_quit() {
         let mut app = AppState::new(default_settings(), test_registry());
 
@@ -1821,6 +1882,58 @@ mod tests {
         );
 
         assert!(!handled);
+    }
+
+    #[test]
+    fn q_quits_from_overview_without_overlay() {
+        let mut app = AppState::new(default_settings(), test_registry());
+
+        let handled = handle_primary_view_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(handled);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn esc_quits_from_overview_without_overlay() {
+        let mut app = AppState::new(default_settings(), test_registry());
+
+        let handled =
+            handle_primary_view_quit_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(handled);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn primary_view_quit_is_not_handled_when_overlay_is_open() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::SortPicker;
+
+        let handled = handle_primary_view_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(!handled);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn primary_view_quit_is_not_handled_outside_overview() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.active_view = ActiveView::Detail;
+
+        let handled = handle_primary_view_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(!handled);
+        assert!(!app.should_quit);
     }
 
     #[test]

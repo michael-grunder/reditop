@@ -17,7 +17,7 @@
 
 ## Key Bindings
 
-- `q`: quit, or close the active overlay window
+- `q`: quit from the overview, or close the active overlay window
 - `Ctrl+C`: quit immediately
 - `F1`: open full help page
 - `F3`: start search input (overview)
@@ -29,7 +29,7 @@
 - `?`: toggle help
 - `Up/Down`: move selection in overview, or scroll/paginate `Commandstats` and `Bigkeys` in detail view
 - `Enter`: open detail
-- `Esc`: back to previous view (or stop filter editing)
+- `Esc`: quit from the overview, close the active overlay window, go back from detail/help, or stop filter editing
 - `Tab` / `Left` / `Right`: cycle detail tabs
 - `S` / `L` / `I` / `C` / `B`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` in detail view
 - `t`: toggle tree/flat
