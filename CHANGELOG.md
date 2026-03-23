@@ -1,11 +1,14 @@
 ## Unreleased
 
+### Added
+
+- Add richer Redis instance statuses such as `PROTECTED` and `AUTH`, and show
+  full server-reported error details in the detail summary view.
+
 ### Changed
 
 - Shorten the autodiscovery footer to a compact in-progress spinner label and
   clear it automatically once discovery completes.
-
-### Added
 
 - Add background Redis/Valkey autodiscovery with curated host port probing,
   localhost socket/process hints, Redis verification, and live TUI updates.

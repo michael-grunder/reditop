@@ -9,7 +9,9 @@ use tokio::sync::{Semaphore, mpsc};
 
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, Status, Target, TargetProtocol};
 use crate::parse::{ParsedInfo, collect_cluster_shard_addresses, parse_info};
-use crate::poller::{apply_cluster_shards_to_state, apply_info_to_state, redis_url};
+use crate::poller::{
+    apply_cluster_shards_to_state, apply_info_to_state, classify_error, error_details, redis_url,
+};
 use crate::target_addr::{canonical_host, strip_host, tcp_host};
 
 const LOCALHOST_NAMES: &[&str] = &["localhost", "127.0.0.1", "::1"];
@@ -472,14 +474,14 @@ async fn verify_candidate(
     {
         Ok(conn) => conn,
         Err(err) => {
-            let status = classify_error_status(&err);
+            let (status, details) = classify_error(&err);
             return VerificationResult {
                 verified: None,
                 failure: Some(VerificationFailure {
                     candidate,
                     status,
-                    message: err.to_string(),
-                    tls_required: looks_like_tls_required(&err.to_string()),
+                    message: details.message.clone(),
+                    tls_required: looks_like_tls_required(&details.message),
                 }),
                 expanded_candidates: Vec::new(),
             };
@@ -488,25 +490,32 @@ async fn verify_candidate(
     let latency_ms = connect_start.elapsed().as_secs_f64() * 1000.0;
 
     let mut auth_required = false;
+    let mut auth_error_message = None;
     let hello = redis::cmd("HELLO")
         .arg(3)
         .query_async::<Value>(&mut conn)
         .await;
     match hello {
         Ok(_) => {}
-        Err(err) if is_auth_required(&err) => auth_required = true,
+        Err(err) if is_auth_required(&err) => {
+            auth_required = true;
+            auth_error_message.get_or_insert_with(|| err.to_string());
+        }
         Err(_) => match redis::cmd("PING").query_async::<String>(&mut conn).await {
             Ok(_) => {}
-            Err(err) if is_auth_required(&err) => auth_required = true,
+            Err(err) if is_auth_required(&err) => {
+                auth_required = true;
+                auth_error_message.get_or_insert_with(|| err.to_string());
+            }
             Err(err) => {
-                let status = classify_error_status(&err);
+                let (status, details) = classify_error(&err);
                 return VerificationResult {
                     verified: None,
                     failure: Some(VerificationFailure {
                         candidate,
                         status,
-                        message: err.to_string(),
-                        tls_required: looks_like_tls_required(&err.to_string()),
+                        message: details.message.clone(),
+                        tls_required: looks_like_tls_required(&details.message),
                     }),
                     expanded_candidates: Vec::new(),
                 };
@@ -519,8 +528,13 @@ async fn verify_candidate(
     state.last_updated = Some(Instant::now());
 
     if auth_required {
-        state.status = Status::AuthFail;
-        state.last_error = Some("authentication required".to_string());
+        let details = auth_error_message.map_or_else(
+            || error_details("authentication required".to_string()),
+            error_details,
+        );
+        state.status = Status::Auth;
+        state.last_error = Some(details.summary.clone());
+        state.error_details = Some(details);
         return VerificationResult {
             verified: Some(VerifiedInstance {
                 candidate: candidate.clone(),
@@ -548,6 +562,7 @@ async fn verify_candidate(
 
     state.status = Status::Ok;
     state.last_error = None;
+    state.error_details = None;
 
     let mut expanded_candidates = Vec::new();
     if is_sentinel {
@@ -860,15 +875,6 @@ fn is_localhost_host(host: &str) -> bool {
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(host))
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
-}
-
-fn classify_error_status(error: &redis::RedisError) -> Status {
-    match error.kind() {
-        ErrorKind::AuthenticationFailed => Status::AuthFail,
-        ErrorKind::Io if error.is_timeout() => Status::Timeout,
-        ErrorKind::Io => Status::Down,
-        _ => Status::Error,
-    }
 }
 
 fn is_auth_required(error: &redis::RedisError) -> bool {

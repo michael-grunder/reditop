@@ -6,8 +6,8 @@ use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::model::{
-    BigkeyEntry, BigkeysMetrics, BigkeysScanStatus, InstanceState, InstanceType, RuntimeSettings,
-    Status, Target, TargetProtocol,
+    BigkeyEntry, BigkeysMetrics, BigkeysScanStatus, ErrorDetails, InstanceState, InstanceType,
+    RuntimeSettings, Status, Target, TargetProtocol,
 };
 use crate::parse::{ClusterShard, parse_cluster_shards, parse_commandstats, parse_info};
 use crate::target_addr::{canonical_host, strip_host};
@@ -142,7 +142,7 @@ async fn poll_one(
     let client = match Client::open(redis_url(target)) {
         Ok(client) => client,
         Err(err) => {
-            apply_failure(&mut state, Status::Error, err.to_string());
+            apply_failure(&mut state, Status::Error, error_details(err.to_string()));
             return state;
         }
     };
@@ -201,6 +201,7 @@ async fn poll_one(
     state.last_latency_ms = Some(latency_ms);
     state.status = Status::Ok;
     state.last_error = None;
+    state.error_details = None;
     state.last_updated = Some(Instant::now());
 
     state
@@ -229,8 +230,8 @@ async fn poll_bigkeys(
     {
         Ok(conn) => conn,
         Err(err) => {
-            let (_, message) = classify_error(&err);
-            apply_bigkeys_failure(&mut state, message);
+            let (_, details) = classify_error(&err);
+            apply_bigkeys_failure(&mut state, details.message);
             return state;
         }
     };
@@ -317,9 +318,10 @@ pub(crate) fn apply_info_to_state(
     }
 }
 
-fn apply_failure(state: &mut InstanceState, status: Status, message: String) {
+fn apply_failure(state: &mut InstanceState, status: Status, details: ErrorDetails) {
     state.status = status;
-    state.last_error = Some(truncate_string(message, 80));
+    state.last_error = Some(details.summary.clone());
+    state.error_details = Some(details);
 }
 
 fn apply_bigkeys_failure(state: &mut InstanceState, message: String) {
@@ -333,23 +335,55 @@ fn bigkeys_requires_readonly(state: &InstanceState) -> bool {
         && matches!(state.detail.role.as_deref(), Some("slave" | "replica"))
 }
 
-fn classify_error(error: &redis::RedisError) -> (Status, String) {
-    let msg = error.to_string();
+pub(crate) fn error_details(message: String) -> ErrorDetails {
+    ErrorDetails {
+        summary: truncate_for_single_line(&message, 80),
+        message,
+    }
+}
 
-    if let Some(code) = error.code() {
+pub(crate) fn classify_error(error: &redis::RedisError) -> (Status, ErrorDetails) {
+    let msg = error.to_string();
+    let status = classify_error_status(error.code(), &msg, error.kind(), error.is_timeout());
+
+    if status == Status::Protected {
+        return (
+            status,
+            ErrorDetails {
+                summary: "Redis protected mode denies remote connections".to_string(),
+                message: msg,
+            },
+        );
+    }
+
+    (status, error_details(msg))
+}
+
+pub(crate) fn classify_error_status(
+    code: Option<&str>,
+    message: &str,
+    kind: ErrorKind,
+    is_timeout: bool,
+) -> Status {
+    let msg_lower = message.to_ascii_lowercase();
+
+    if let Some(code) = code {
+        if code == "DENIED" && msg_lower.contains("protected mode") {
+            return Status::Protected;
+        }
         if code == "NOAUTH" || code == "WRONGPASS" {
-            return (Status::AuthFail, msg);
+            return Status::Auth;
         }
         if code == "LOADING" {
-            return (Status::Loading, msg);
+            return Status::Loading;
         }
     }
 
-    match error.kind() {
-        ErrorKind::AuthenticationFailed => (Status::AuthFail, msg),
-        ErrorKind::Io if error.is_timeout() => (Status::Timeout, msg),
-        ErrorKind::Io => (Status::Down, msg),
-        _ => (Status::Error, msg),
+    match kind {
+        ErrorKind::AuthenticationFailed => Status::Auth,
+        ErrorKind::Io if is_timeout => Status::Timeout,
+        ErrorKind::Io => Status::Down,
+        _ => Status::Error,
     }
 }
 
@@ -559,6 +593,14 @@ fn is_unknown_command(error: &redis::RedisError) -> bool {
             .contains("unknown command")
 }
 
+fn truncate_for_single_line(input: &str, max_chars: usize) -> String {
+    let single_line = input.lines().next().unwrap_or(input).trim();
+    if single_line.chars().count() <= max_chars {
+        return single_line.to_string();
+    }
+    single_line.chars().take(max_chars).collect()
+}
+
 fn truncate_string(input: String, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
         return input;
@@ -641,13 +683,13 @@ fn addresses_match(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use redis::Value;
+    use redis::{ErrorKind, Value};
 
     use super::{
-        BIGKEYS_TOP_N, BigkeyEntry, bigkeys_requires_readonly, cluster_signature,
-        insert_bigkey_entry, key_type_size_command,
+        BIGKEYS_TOP_N, BigkeyEntry, bigkeys_requires_readonly, classify_error_status,
+        cluster_signature, insert_bigkey_entry, key_type_size_command,
     };
-    use crate::model::{DetailMetrics, InstanceState};
+    use crate::model::{DetailMetrics, InstanceState, Status};
     use crate::parse::{ClusterShard, ClusterShardNode, ClusterShardRole, parse_cluster_shards};
 
     #[test]
@@ -764,5 +806,38 @@ mod tests {
         state.detail.cluster_enabled = false;
         state.detail.role = Some("replica".into());
         assert!(!bigkeys_requires_readonly(&state));
+    }
+
+    #[test]
+    fn classify_error_status_detects_protected_mode() {
+        let status = classify_error_status(
+            Some("DENIED"),
+            "DENIED Redis is running in protected mode because protected mode is enabled.",
+            ErrorKind::Server(redis::ServerErrorKind::ResponseError),
+            false,
+        );
+        assert_eq!(status, Status::Protected);
+    }
+
+    #[test]
+    fn classify_error_status_detects_auth_codes() {
+        assert_eq!(
+            classify_error_status(
+                Some("NOAUTH"),
+                "NOAUTH Authentication required.",
+                ErrorKind::Server(redis::ServerErrorKind::ResponseError),
+                false,
+            ),
+            Status::Auth
+        );
+        assert_eq!(
+            classify_error_status(
+                Some("WRONGPASS"),
+                "WRONGPASS invalid password",
+                ErrorKind::Io,
+                false
+            ),
+            Status::Auth
+        );
     }
 }

@@ -10,12 +10,14 @@
   - generic, configurable columns (INFO-backed + calculated)
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
 - Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, and an on-demand `bigkeys` view
+  including full server-reported error details when polling fails
 - Tree and flat overview modes
 - Sorting by currently visible column keys and substring filtering
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
 - Live discovery status in the footer, including queued/probing/verified counts
 - Config loading from TOML + CLI target merge
 - Handles per-instance failures without crashing UI
+- Surfaces richer instance states such as `PROTECTED`, `AUTH`, `LOADING`, and `DOWN`
 
 ## Key Bindings
 

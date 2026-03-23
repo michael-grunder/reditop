@@ -148,7 +148,8 @@ impl InstanceType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Ok,
-    AuthFail,
+    Protected,
+    Auth,
     Timeout,
     Down,
     Loading,
@@ -159,7 +160,8 @@ impl Status {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "OK",
-            Self::AuthFail => "AUTHFAIL",
+            Self::Protected => "PROTECTED",
+            Self::Auth => "AUTH",
             Self::Timeout => "TIMEOUT",
             Self::Down => "DOWN",
             Self::Loading => "LOADING",
@@ -170,13 +172,20 @@ impl Status {
     pub const fn severity(self) -> u8 {
         match self {
             Self::Down => 0,
-            Self::AuthFail => 1,
-            Self::Timeout => 2,
-            Self::Loading => 3,
-            Self::Error => 4,
-            Self::Ok => 5,
+            Self::Protected => 1,
+            Self::Auth => 2,
+            Self::Timeout => 3,
+            Self::Loading => 4,
+            Self::Error => 5,
+            Self::Ok => 6,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorDetails {
+    pub summary: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -251,6 +260,7 @@ pub struct InstanceState {
     pub avg_latency_ms: f64,
     pub status: Status,
     pub last_error: Option<String>,
+    pub error_details: Option<ErrorDetails>,
     pub last_updated: Option<Instant>,
     pub latency_window: VecDeque<f64>,
     pub detail: DetailMetrics,
@@ -275,6 +285,7 @@ impl InstanceState {
             avg_latency_ms: 0.0,
             status: Status::Down,
             last_error: None,
+            error_details: None,
             last_updated: None,
             latency_window: VecDeque::with_capacity(120),
             detail: DetailMetrics::default(),

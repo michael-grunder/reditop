@@ -894,7 +894,8 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 (Some(host), None) => host.to_string(),
                 _ => "-".to_string(),
             };
-            let body = format_aligned_rows(&[
+            let mut body = format_aligned_rows(&[
+                ("status", instance.status.as_str().to_string()),
                 (
                     "used_memory",
                     format_optional_bytes(instance.used_memory_bytes),
@@ -930,6 +931,13 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
                 ),
                 ("master", replication_source),
             ]);
+            if let Some(details) = &instance.error_details {
+                let _ = write!(
+                    body,
+                    "\n\nerror_summary : {}\nerror_details : {}",
+                    details.summary, details.message
+                );
+            }
             frame.render_widget(
                 Paragraph::new(body)
                     .style(base_style(app))
@@ -1366,7 +1374,13 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     } else if let Some(key) = app.selected_key() {
         app.instances
             .get(&key)
-            .and_then(|instance| instance.last_error.clone())
+            .and_then(|instance| {
+                instance
+                    .error_details
+                    .as_ref()
+                    .map(|details| details.summary.clone())
+                    .or_else(|| instance.last_error.clone())
+            })
             .unwrap_or_default()
     } else {
         String::new()
@@ -1721,7 +1735,8 @@ mod tests {
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
     use crate::model::{
-        BigkeyEntry, BigkeysScanStatus, CommandStat, InstanceState, SortMode, Status, ViewMode,
+        BigkeyEntry, BigkeysScanStatus, CommandStat, ErrorDetails, InstanceState, SortMode, Status,
+        ViewMode,
     };
     use crate::registry::ColumnRegistry;
 
@@ -2438,6 +2453,50 @@ mod tests {
         assert_eq!(
             bigkeys_age_title(&bigkeys).map(|line| line.to_string()),
             Some("age: 0s".to_string())
+        );
+    }
+
+    #[test]
+    fn detail_summary_renders_full_error_details() {
+        let mut app = crate::app::AppState::new(default_settings(), test_registry());
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 0;
+
+        let mut instance = InstanceState::new("a".into(), "192.168.0.174:6379".into());
+        instance.status = Status::Protected;
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.error_details = Some(ErrorDetails {
+            summary: "Redis protected mode denies remote connections".into(),
+            message: "DENIED Redis is running in protected mode because protected mode is enabled and no password is set.".into(),
+        });
+        instance.last_error = instance
+            .error_details
+            .as_ref()
+            .map(|details| details.summary.clone());
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(120, 28);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("status") && line.contains("PROTECTED"))
+        );
+        assert!(lines.iter().any(|line| line.contains("error_summary")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| { line.contains("Redis protected mode denies remote connections") })
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("DENIED Redis is running in protected mode"))
         );
     }
 
