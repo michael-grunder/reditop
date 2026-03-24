@@ -30,6 +30,10 @@ pub fn tcp_host(addr: &str) -> Option<String> {
     extract_host(addr).map(str::to_string)
 }
 
+pub fn tcp_port(addr: &str) -> Option<u16> {
+    strip_host(addr)?.parse::<u16>().ok()
+}
+
 pub fn strip_host(addr: &str) -> Option<String> {
     if addr.contains('/') {
         return None;
@@ -107,7 +111,7 @@ fn extract_host(addr: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_host, normalize_tcp_addr, strip_host};
+    use super::{canonical_host, normalize_tcp_addr, strip_host, tcp_port};
 
     #[test]
     fn normalizes_port_only_targets() {
@@ -143,5 +147,12 @@ mod tests {
         assert_eq!(strip_host("localhost:6379"), Some("6379".to_string()));
         assert_eq!(strip_host("[::1]:6380"), Some("6380".to_string()));
         assert_eq!(strip_host("/tmp/redis.sock"), None);
+    }
+
+    #[test]
+    fn extracts_tcp_port_for_host_port_addresses() {
+        assert_eq!(tcp_port("localhost:6379"), Some(6379));
+        assert_eq!(tcp_port("[::1]:6380"), Some(6380));
+        assert_eq!(tcp_port("/tmp/redis.sock"), None);
     }
 }

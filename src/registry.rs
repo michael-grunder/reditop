@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -11,6 +10,7 @@ use serde::Deserialize;
 use crate::column::{Align, Column, Emphasis, EmphasisStyle, FormatSpec, ValueType, WidthHint};
 use crate::columns::calc::{CalcColumn, CalcKind};
 use crate::columns::info::RedisInfoFieldColumn;
+use crate::config;
 use crate::model::{SortDirection, SortMode, UiColor};
 
 const DEFAULT_COLUMNS_TOML: &str = include_str!("default_columns.toml");
@@ -41,7 +41,7 @@ impl ColumnRegistry {
             eprintln!("warning: failed to parse built-in column config: {err}");
         }
 
-        let user_config = resolve_config_path(config_path, no_default_config);
+        let user_config = config::resolve_config_path(config_path, no_default_config);
         if let Some(path) = user_config {
             match fs::read_to_string(&path) {
                 Ok(content) => {
@@ -164,31 +164,6 @@ impl ColumnRegistry {
         self.columns = columns;
         Ok(())
     }
-}
-
-fn resolve_config_path(explicit: Option<&Path>, no_default: bool) -> Option<PathBuf> {
-    if let Some(path) = explicit {
-        return Some(path.to_path_buf());
-    }
-    if no_default {
-        return None;
-    }
-
-    let mut candidates = Vec::new();
-    if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
-        candidates.push(PathBuf::from(xdg).join("redis-top").join("config.toml"));
-    }
-    if let Some(home) = env::var_os("HOME") {
-        candidates.push(
-            PathBuf::from(home)
-                .join(".config")
-                .join("redis-top")
-                .join("config.toml"),
-        );
-    }
-    candidates.push(PathBuf::from("redis-top.toml"));
-
-    candidates.into_iter().find(|candidate| candidate.exists())
 }
 
 #[derive(Debug, Deserialize, Default)]

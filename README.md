@@ -67,7 +67,7 @@ reditop --host 192.168.0.148 --host 192.168.0.149
 reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
 reditop --cluster 7000
 reditop --cluster 10.0.0.11:7000 --cluster 10.0.0.12:7000
-reditop --config ~/.config/redis-top/config.toml
+reditop --config ~/.config/redis-top.toml
 reditop -c config.toml 127.0.0.1:6379
 ```
 
@@ -179,8 +179,8 @@ early and the rest of the suite still runs.
 
 Search order when `--config` is not provided:
 
-1. `$XDG_CONFIG_HOME/redis-top/config.toml`
-2. `~/.config/redis-top/config.toml`
+1. `$XDG_CONFIG_HOME/redis-top.toml`
+2. `~/.config/redis-top.toml`
 3. `./redis-top.toml`
 
 Example:
@@ -203,8 +203,10 @@ critical_color = "red"
 
 [[targets]]
 alias = "local"
-addr = "127.0.0.1:6379"
+addr = ":6379"
 protocol = "tcp"
+user = "default"
+password_env = "REDIS_PASSWORD"
 enabled = true
 
 [columns.used_mem]
@@ -245,6 +247,12 @@ dir = "desc"
 
 `[theme]` colors support: `black`, `red`, `green`, `yellow`, `blue`,
 `magenta`, `cyan`, `gray`/`grey`, `white`.
+
+`[[targets]]` accepts `user` or `username`, plus either `password` or
+`password_env`. If you omit the host from a TCP `addr`, `reditop` assumes
+`localhost`, so `:6380` and `6380` both resolve to loopback addresses. Configured
+TCP target credentials are also reused by autodiscovery when it verifies the
+same `host:port`.
 
 Overview columns also support `emphasis = "max"` or `emphasis = "min"` to mark
 the highest or lowest visible value each frame.

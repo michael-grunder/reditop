@@ -30,8 +30,10 @@ struct ConfigTarget {
     alias: Option<String>,
     addr: Option<String>,
     protocol: Option<String>,
+    #[serde(alias = "user")]
     username: Option<String>,
     password: Option<String>,
+    password_env: Option<String>,
     tags: Option<Vec<String>>,
     enabled: Option<bool>,
 }
@@ -74,16 +76,7 @@ pub fn load_config(
     path: Option<&Path>,
     no_default_config: bool,
 ) -> Result<(RuntimeOverrides, Vec<Target>)> {
-    let maybe_path = path.map_or_else(
-        || {
-            if no_default_config {
-                None
-            } else {
-                find_default_config_path()
-            }
-        },
-        |explicit| Some(explicit.to_path_buf()),
-    );
+    let maybe_path = resolve_config_path(path, no_default_config);
 
     let Some(path) = maybe_path else {
         return Ok((RuntimeOverrides::default(), Vec::new()));
@@ -101,13 +94,14 @@ pub fn load_config(
                 continue;
             }
 
-            let Some(addr) = entry.addr else {
+            let Some(addr) = entry.addr.as_deref() else {
                 eprintln!(
                     "warning: skipping target with missing addr in {}",
                     path.display()
                 );
                 continue;
             };
+            let password = resolve_password(&entry, &path)?;
             let addr = addr.trim().to_string();
             if addr.is_empty() {
                 eprintln!(
@@ -127,7 +121,7 @@ pub fn load_config(
                 addr,
                 protocol,
                 username: entry.username,
-                password: entry.password,
+                password,
                 tags: entry.tags.unwrap_or_default(),
             });
         }
@@ -173,25 +167,59 @@ pub fn apply_overrides(mut base: RuntimeSettings, overrides: &RuntimeOverrides) 
     base
 }
 
+pub fn resolve_config_path(path: Option<&Path>, no_default_config: bool) -> Option<PathBuf> {
+    if let Some(explicit) = path {
+        return Some(explicit.to_path_buf());
+    }
+    if no_default_config {
+        return None;
+    }
+
+    find_default_config_path()
+}
+
 fn find_default_config_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
-        candidates.push(PathBuf::from(xdg).join("redis-top").join("config.toml"));
+        candidates.push(PathBuf::from(xdg).join("redis-top.toml"));
     }
 
     if let Some(home) = env::var_os("HOME") {
-        candidates.push(
-            PathBuf::from(home)
-                .join(".config")
-                .join("redis-top")
-                .join("config.toml"),
-        );
+        candidates.push(PathBuf::from(home).join(".config").join("redis-top.toml"));
     }
 
     candidates.push(PathBuf::from("redis-top.toml"));
 
     candidates.into_iter().find(|path| path.exists())
+}
+
+fn resolve_password(entry: &ConfigTarget, path: &Path) -> Result<Option<String>> {
+    match (&entry.password, &entry.password_env) {
+        (Some(_), Some(_)) => bail!(
+            "target {} in {} cannot set both password and password_env",
+            entry.addr.as_deref().unwrap_or("<missing addr>"),
+            path.display()
+        ),
+        (Some(password), None) => Ok(Some(password.clone())),
+        (None, Some(var_name)) => match env::var(var_name) {
+            Ok(password) => Ok(Some(password)),
+            Err(env::VarError::NotPresent) => {
+                eprintln!(
+                    "warning: password_env {var_name} is not set for target {} in {}",
+                    entry.addr.as_deref().unwrap_or("<missing addr>"),
+                    path.display()
+                );
+                Ok(None)
+            }
+            Err(env::VarError::NotUnicode(_)) => bail!(
+                "password_env {var_name} for target {} in {} is not valid unicode",
+                entry.addr.as_deref().unwrap_or("<missing addr>"),
+                path.display()
+            ),
+        },
+        (None, None) => Ok(None),
+    }
 }
 
 fn parse_protocol(raw: Option<&str>, addr: &str) -> Result<TargetProtocol> {
@@ -276,10 +304,11 @@ fn parse_color(raw: &str, field: &str) -> Result<UiColor> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::Duration;
 
-    use super::{apply_overrides, default_settings, load_config};
-    use crate::model::{UiColor, UiTheme};
+    use super::{apply_overrides, default_settings, load_config, resolve_config_path};
+    use crate::model::{TargetProtocol, UiColor, UiTheme};
 
     #[test]
     fn default_settings_include_default_theme() {
@@ -334,5 +363,84 @@ foreground_color = "cyan"
         assert_eq!(settings.ui_theme.background, UiColor::Black);
         assert_eq!(settings.ui_theme.foreground, UiColor::Cyan);
         assert_eq!(settings.ui_theme.carat, UiColor::White);
+    }
+
+    #[test]
+    fn load_config_supports_user_alias_and_password_env() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        // SAFETY: tests control this process environment for the duration of the assertion.
+        unsafe {
+            std::env::set_var("REDITOP_TEST_PASSWORD", "secret");
+        }
+        std::fs::write(
+            &path,
+            r#"
+[[targets]]
+addr = ":6380"
+user = "alice"
+password_env = "REDITOP_TEST_PASSWORD"
+"#,
+        )
+        .expect("write config");
+
+        let (_, targets) = load_config(Some(&path), false).expect("load config");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].addr, "127.0.0.1:6380");
+        assert_eq!(targets[0].protocol, TargetProtocol::Tcp);
+        assert_eq!(targets[0].username.as_deref(), Some("alice"));
+        assert_eq!(targets[0].password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn load_config_rejects_both_password_sources() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[targets]]
+addr = "127.0.0.1:6379"
+password = "secret"
+password_env = "REDITOP_TEST_PASSWORD"
+"#,
+        )
+        .expect("write config");
+
+        let err = load_config(Some(&path), false).expect_err("config should fail");
+        assert!(err.to_string().contains("both password and password_env"));
+    }
+
+    #[test]
+    fn resolve_config_path_prefers_flat_xdg_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let xdg = dir.path().join("xdg");
+        std::fs::create_dir_all(&xdg).expect("xdg dir");
+        let config_path = xdg.join("redis-top.toml");
+        std::fs::write(&config_path, "").expect("write config");
+
+        let old_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let old_home = std::env::var_os("HOME");
+        // SAFETY: tests control this process environment for the duration of the assertion.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &xdg);
+            std::env::set_var("HOME", dir.path().join("home"));
+        }
+
+        let resolved = resolve_config_path(None, false);
+        assert_eq!(resolved, Some(PathBuf::from(&config_path)));
+
+        // SAFETY: restore the prior process environment after the assertion.
+        unsafe {
+            match old_xdg {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match old_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            std::env::remove_var("REDITOP_TEST_PASSWORD");
+        }
     }
 }

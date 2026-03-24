@@ -9,13 +9,15 @@
 
 - Shorten the autodiscovery footer to a compact in-progress spinner label and
   clear it automatically once discovery completes.
-
 - Add background Redis/Valkey autodiscovery with curated host port probing,
   localhost socket/process hints, Redis verification, and live TUI updates.
 - Add `--host <HOST>` for remote autodiscovery, including repeated `--host`
   usage for scanning multiple hosts in one session.
 - Add an available `connected_clients` overview column backed by Redis `INFO`
   clients output.
+- Move the default config file lookup to flat `redis-top.toml` files under
+  `$XDG_CONFIG_HOME` or `~/.config`, and reuse configured TCP credentials during
+  autodiscovery for matching endpoints.
 
 ### Fixed
 
@@ -25,3 +27,6 @@
   open, while still making both keys close the active overlay first.
 - Preserve configured overview column order on startup by deserializing column
   definitions with insertion order instead of hash order.
+- Add config support for `user`/`username`, plaintext `password`, and
+  env-backed `password_env`, including loopback defaults for hostless TCP
+  addresses such as `:6380`.

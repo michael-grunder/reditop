@@ -12,7 +12,7 @@ use crate::parse::{ParsedInfo, collect_cluster_shard_addresses, parse_info};
 use crate::poller::{
     apply_cluster_shards_to_state, apply_info_to_state, classify_error, error_details, redis_url,
 };
-use crate::target_addr::{canonical_host, strip_host, tcp_host};
+use crate::target_addr::{canonical_host, strip_host, tcp_host, tcp_port};
 
 const LOCALHOST_NAMES: &[&str] = &["localhost", "127.0.0.1", "::1"];
 const DISCOVERY_TAG: &str = "autodiscovered";
@@ -22,6 +22,32 @@ pub struct DiscoveryTarget {
     pub host: String,
     pub username: Option<String>,
     pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CandidateCredentials {
+    username: Option<String>,
+    password: Option<String>,
+}
+
+impl CandidateCredentials {
+    fn merge_from_target(&mut self, target: &Target) {
+        if self.username.is_none() {
+            self.username.clone_from(&target.username);
+        }
+        if self.password.is_none() {
+            self.password.clone_from(&target.password);
+        }
+    }
+
+    fn apply_to_candidate(&self, candidate: &mut CandidateEndpoint) {
+        if candidate.username.is_none() {
+            candidate.username.clone_from(&self.username);
+        }
+        if candidate.password.is_none() {
+            candidate.password.clone_from(&self.password);
+        }
+    }
 }
 
 impl DiscoveryTarget {
@@ -82,12 +108,7 @@ impl CandidateEndpoint {
     }
 
     pub fn dedupe_key(&self) -> String {
-        let host = if is_localhost_host(&self.host) {
-            "127.0.0.1".to_string()
-        } else {
-            canonical_host(&self.addr()).unwrap_or_else(|| self.host.to_ascii_lowercase())
-        };
-        format!("{host}:{}", self.port)
+        candidate_key(&self.host, self.port)
     }
 
     pub fn into_target(self) -> Target {
@@ -261,6 +282,7 @@ pub fn start(
     let (event_tx, event_rx) = mpsc::channel(1024);
 
     tokio::spawn(async move {
+        let configured_credentials = credential_map(&seed_targets);
         let seed_candidates = seed_targets
             .into_iter()
             .filter(|target| target.protocol == TargetProtocol::Tcp)
@@ -302,7 +324,12 @@ pub fn start(
         while let Some(message) = manager_rx.recv().await {
             match message {
                 ManagerMessage::Candidates(candidates) => {
-                    for candidate in candidates {
+                    for mut candidate in candidates {
+                        if let Some(credentials) =
+                            configured_credentials.get(&candidate.dedupe_key())
+                        {
+                            credentials.apply_to_candidate(&mut candidate);
+                        }
                         let key = candidate.dedupe_key();
                         if let Some(existing) = preferred_candidates.get_mut(&key) {
                             existing.merge_from(&candidate);
@@ -741,6 +768,46 @@ fn candidate_from_addr(
     })
 }
 
+fn credential_map(targets: &[Target]) -> HashMap<String, CandidateCredentials> {
+    let mut out = HashMap::new();
+    for target in targets {
+        let Some(key) = tcp_target_key(target) else {
+            continue;
+        };
+        out.entry(key)
+            .and_modify(|existing: &mut CandidateCredentials| existing.merge_from_target(target))
+            .or_insert_with(|| CandidateCredentials {
+                username: target.username.clone(),
+                password: target.password.clone(),
+            });
+    }
+    out
+}
+
+fn tcp_target_key(target: &Target) -> Option<String> {
+    if target.protocol != TargetProtocol::Tcp {
+        return None;
+    }
+
+    let host = tcp_host(&target.addr)?;
+    let port = tcp_port(&target.addr)?;
+    Some(candidate_key(&host, port))
+}
+
+fn candidate_key(host: &str, port: u16) -> String {
+    let normalized_host = if is_localhost_host(host) {
+        "127.0.0.1".to_string()
+    } else {
+        let addr = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        canonical_host(&addr).unwrap_or_else(|| host.to_ascii_lowercase())
+    };
+    format!("{normalized_host}:{port}")
+}
+
 fn curated_ports() -> BTreeSet<u16> {
     let mut ports = BTreeSet::new();
     ports.insert(6379);
@@ -893,9 +960,10 @@ fn looks_like_tls_required(message: &str) -> bool {
 mod tests {
     use super::{
         CandidateEndpoint, CandidateSource, DiscoveryEvent, DiscoveryPhase, DiscoveryStatus,
-        DiscoveryTarget, dedupe_candidates, extract_ports_from_cmdline, is_localhost_host,
-        parse_proc_net_listening_ports, replication_candidates,
+        DiscoveryTarget, credential_map, dedupe_candidates, extract_ports_from_cmdline,
+        is_localhost_host, parse_proc_net_listening_ports, replication_candidates,
     };
+    use crate::model::{Target, TargetProtocol};
     use crate::parse::parse_info;
 
     #[test]
@@ -928,6 +996,26 @@ mod tests {
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].username.as_deref(), Some("alice"));
         assert_eq!(deduped[0].password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn credential_map_matches_localhost_aliases_by_port() {
+        let targets = vec![Target {
+            alias: None,
+            addr: "localhost:6380".to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: Some("alice".to_string()),
+            password: Some("secret".to_string()),
+            tags: Vec::new(),
+        }];
+
+        let mapped = credential_map(&targets);
+        let credentials = mapped
+            .get("127.0.0.1:6380")
+            .expect("localhost config should canonicalize to loopback");
+
+        assert_eq!(credentials.username.as_deref(), Some("alice"));
+        assert_eq!(credentials.password.as_deref(), Some("secret"));
     }
 
     #[test]
