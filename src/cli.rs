@@ -379,10 +379,7 @@ mod tests {
         let discovered = build_discovery_targets(&targets, targets.len(), true, &[], None, None);
 
         assert_eq!(discovered.len(), 1);
-        assert_eq!(
-            discovered[0],
-            DiscoveryTarget::localhost(None, None)
-        );
+        assert_eq!(discovered[0], DiscoveryTarget::localhost(None, None));
     }
 
     #[test]
@@ -406,10 +403,7 @@ mod tests {
         ));
 
         assert_eq!(discovered.len(), 1);
-        assert_eq!(
-            discovered[0],
-            DiscoveryTarget::localhost(None, None)
-        );
+        assert_eq!(discovered[0], DiscoveryTarget::localhost(None, None));
     }
 
     #[test]
