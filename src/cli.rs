@@ -303,8 +303,8 @@ fn build_discovery_targets(
             .filter_map(|target| {
                 crate::target_addr::tcp_host(&target.addr).map(|host| DiscoveryTarget {
                     host,
-                    username: target.username.clone(),
-                    password: target.password.clone(),
+                    username: None,
+                    password: None,
                 })
             }),
     );
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(discovered.len(), 1);
         assert_eq!(
             discovered[0],
-            DiscoveryTarget::localhost(Some("default".to_string()), Some("secret".to_string()))
+            DiscoveryTarget::localhost(None, None)
         );
     }
 
@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(discovered.len(), 1);
         assert_eq!(
             discovered[0],
-            DiscoveryTarget::localhost(Some("default".to_string()), Some("secret".to_string()))
+            DiscoveryTarget::localhost(None, None)
         );
     }
 
@@ -442,6 +442,29 @@ mod tests {
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].host, "127.0.0.1");
+    }
+
+    #[test]
+    fn config_target_credentials_do_not_leak_to_hostwide_discovery() {
+        let config_target = Target {
+            alias: Some("saved".to_string()),
+            addr: "127.0.0.1:6380".to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: Some("default".to_string()),
+            password: Some("secret".to_string()),
+            tags: Vec::new(),
+        };
+
+        let discovered = dedupe_discovery_targets(build_discovery_targets(
+            &[config_target],
+            1,
+            true,
+            &[],
+            None,
+            None,
+        ));
+
+        assert_eq!(discovered, vec![DiscoveryTarget::localhost(None, None)]);
     }
 
     #[test]

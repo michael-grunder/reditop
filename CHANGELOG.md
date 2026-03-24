@@ -25,6 +25,9 @@
 
 ### Fixed
 
+- Keep autodiscovery active when config-defined TCP targets provide credentials
+  by reusing those credentials only for exact matching endpoints instead of
+  applying them to every discovered port on the same host.
 - Make `q` close the active overlay window instead of exiting the TUI, while
   keeping `Ctrl+C` as an immediate full exit.
 - Restore `q` and `Esc` quitting from the main overview when no overlay is
