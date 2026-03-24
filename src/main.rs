@@ -6,5 +6,5 @@ use reditop::{cli, tui};
 #[tokio::main]
 async fn main() -> Result<()> {
     let launch = cli::build_launch_config()?;
-    tui::run(launch)
+    tui::run(launch).await
 }

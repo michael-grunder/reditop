@@ -6,6 +6,8 @@
   full server-reported error details in the detail summary view.
 - Add `[global].still_autodiscover`, defaulting to `true`, so config-defined
   targets can provide credentials without disabling background autodiscovery.
+- Add `--once` to print the overview status table a single time for polled and
+  autodiscovered instances, then exit without starting the interactive TUI.
 
 ### Changed
 

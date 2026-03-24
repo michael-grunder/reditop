@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -53,7 +53,7 @@ const DETAIL_TABS: [DetailTabSpec; 5] = [
     },
 ];
 
-pub fn run(launch: LaunchConfig) -> Result<()> {
+pub async fn run(launch: LaunchConfig) -> Result<()> {
     if launch.verbose {
         eprintln!(
             "redis-top: targets={} refresh={} connect_timeout={} command_timeout={}",
@@ -63,10 +63,47 @@ pub fn run(launch: LaunchConfig) -> Result<()> {
             humantime::format_duration(launch.settings.command_timeout)
         );
     }
+    if launch.once {
+        return run_once(launch).await;
+    }
     let mut terminal = setup_terminal()?;
     let result = run_loop(&mut terminal, launch);
     restore_terminal(&mut terminal)?;
     result
+}
+
+async fn run_once(launch: LaunchConfig) -> Result<()> {
+    let registry = ColumnRegistry::load(
+        launch.config_path.as_deref(),
+        launch.no_default_config,
+        launch.settings.default_sort,
+    );
+    let mut app = AppState::new(launch.settings.clone(), registry);
+
+    for state in poller::refresh_targets_once(launch.targets.clone(), launch.settings.clone()).await
+    {
+        app.apply_update(state);
+    }
+
+    let mut discovery_rx =
+        discovery::start(launch.discovery_targets, launch.targets, launch.settings);
+    while let Some(event) = discovery_rx.recv().await {
+        app.apply_discovery_event(&event);
+        if let DiscoveryEvent::VerificationSucceeded(verified) = &event {
+            app.apply_verified_instance((**verified).clone());
+        }
+        if matches!(event, DiscoveryEvent::Complete) {
+            break;
+        }
+    }
+
+    let output = render_overview_table(&app);
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(output.as_bytes())?;
+    if !output.ends_with('\n') {
+        stdout.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -707,6 +744,77 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     frame.render_stateful_widget(table, chunks[1], &mut state);
 }
 
+fn render_overview_table(app: &AppState) -> String {
+    let rows = app.visible_rows();
+    if rows.is_empty() {
+        return "No Redis/Valkey instances found.".to_string();
+    }
+
+    let column_keys = app.visible_column_keys();
+    let columns: Vec<_> = column_keys
+        .iter()
+        .filter_map(|key| app.column_registry.column(key))
+        .collect();
+    if columns.is_empty() {
+        return "No overview columns are enabled.".to_string();
+    }
+
+    let rendered_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            column_keys
+                .iter()
+                .map(|key| app.render_cell(row, key).unwrap_or_default())
+                .collect()
+        })
+        .collect();
+
+    let mut widths: Vec<usize> = columns
+        .iter()
+        .zip(column_keys.iter())
+        .map(|(column, key)| plain_text_width(&sortable_header(column.header(), app, key)))
+        .collect();
+
+    for row in &rendered_rows {
+        for (idx, cell) in row.iter().enumerate() {
+            widths[idx] = widths[idx].max(plain_text_width(cell));
+        }
+    }
+
+    let header = columns
+        .iter()
+        .zip(column_keys.iter())
+        .enumerate()
+        .map(|(idx, (column, key))| {
+            fit_cell_text(
+                &sortable_header(column.header(), app, key),
+                widths[idx],
+                column.align(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let separator = widths
+        .iter()
+        .map(|width| "-".repeat(*width))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let body = rendered_rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(idx, cell)| fit_cell_text(cell, widths[idx], columns[idx].align()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("{header}\n{separator}\n{body}")
+}
+
 fn compute_column_widths(
     table_width: u16,
     columns: &[&std::sync::Arc<dyn crate::column::Column>],
@@ -815,6 +923,10 @@ fn fit_cell_text(text: &str, width: usize, align: Align) -> String {
             )
         }
     }
+}
+
+fn plain_text_width(text: &str) -> usize {
+    text.chars().count()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1729,7 +1841,7 @@ mod tests {
         commandstats_page_len, compute_column_widths, detail_tab_index_for_shortcut,
         detail_tabs_widget, draw, fit_cell_text, format_aligned_rows, format_with_commas,
         handle_column_picker_key, handle_overlay_quit_key, handle_primary_view_quit_key,
-        help_bindings, is_force_quit_key,
+        help_bindings, is_force_quit_key, render_overview_table,
     };
     use crate::app::{ActiveView, AppState, OverviewModal};
     use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
@@ -2668,5 +2780,32 @@ underlined = true
             "latency winner should inherit global italic"
         );
         assert_eq!(buffer.content()[lat_max_idx].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn render_overview_table_outputs_plain_text_table() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.alias = Some("alpha".into());
+        a.status = Status::Ok;
+        a.last_updated = Some(std::time::Instant::now());
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.alias = Some("beta".into());
+        b.status = Status::Down;
+        b.last_updated = Some(std::time::Instant::now());
+
+        app.apply_update(a);
+        app.apply_update(b);
+
+        let rendered = render_overview_table(&app);
+
+        assert!(rendered.contains("Alias"));
+        assert!(rendered.contains("Status"));
+        assert!(rendered.contains("alpha"));
+        assert!(rendered.contains("beta"));
+        assert!(rendered.contains("DOWN"));
     }
 }

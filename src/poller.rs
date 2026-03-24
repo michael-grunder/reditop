@@ -50,24 +50,18 @@ pub fn start(
 
             match request {
                 PollerRequest::RefreshAll => {
-                    let mut set = tokio::task::JoinSet::new();
-                    for target in target_map.values() {
-                        let target = target.clone();
-                        let settings = settings.clone();
-                        let semaphore = semaphore.clone();
-                        let prior = known_states.get(&target.addr).cloned();
-                        set.spawn(async move {
-                            let _permit = semaphore.acquire_owned().await.ok();
-                            poll_one(&target, &settings, prior).await
-                        });
-                    }
+                    let refreshed = refresh_target_states(
+                        target_map.values().cloned().collect(),
+                        &settings,
+                        &known_states,
+                        semaphore.clone(),
+                    )
+                    .await;
 
-                    while let Some(result) = set.join_next().await {
-                        if let Ok(state) = result {
-                            known_states.insert(state.key.clone(), state.clone());
-                            if update_tx.send(state).await.is_err() {
-                                return;
-                            }
+                    for state in refreshed {
+                        known_states.insert(state.key.clone(), state.clone());
+                        if update_tx.send(state).await.is_err() {
+                            return;
                         }
                     }
                 }
@@ -126,6 +120,40 @@ pub fn start(
     });
 
     (update_rx, request_tx)
+}
+
+pub async fn refresh_targets_once(
+    targets: Vec<Target>,
+    settings: RuntimeSettings,
+) -> Vec<InstanceState> {
+    let semaphore = Arc::new(Semaphore::new(settings.concurrency_limit.max(1)));
+    refresh_target_states(targets, &settings, &HashMap::new(), semaphore).await
+}
+
+async fn refresh_target_states(
+    targets: Vec<Target>,
+    settings: &RuntimeSettings,
+    known_states: &HashMap<String, InstanceState>,
+    semaphore: Arc<Semaphore>,
+) -> Vec<InstanceState> {
+    let mut set = tokio::task::JoinSet::new();
+    for target in targets {
+        let settings = settings.clone();
+        let semaphore = semaphore.clone();
+        let prior = known_states.get(&target.addr).cloned();
+        set.spawn(async move {
+            let _permit = semaphore.acquire_owned().await.ok();
+            poll_one(&target, &settings, prior).await
+        });
+    }
+
+    let mut states = Vec::new();
+    while let Some(result) = set.join_next().await {
+        if let Ok(state) = result {
+            states.push(state);
+        }
+    }
+    states
 }
 
 async fn poll_one(

@@ -67,6 +67,8 @@ reditop --host 192.168.0.148 --host 192.168.0.149
 reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
 reditop --cluster 7000
 reditop --cluster 10.0.0.11:7000 --cluster 10.0.0.12:7000
+reditop --once
+reditop --host 10.0.0.12 --once
 reditop --config ~/.config/redis-top.toml
 reditop -c config.toml 127.0.0.1:6379
 ```
@@ -88,6 +90,7 @@ treated as `127.0.0.1:7000`.
 Important options:
 
 - `-c, --config <PATH>`
+- `--once`
 - `--refresh <DURATION>`
 - `--connect-timeout <DURATION>`
 - `--command-timeout <DURATION>`
@@ -100,6 +103,10 @@ Important options:
 - `-a, --auth <PASSWORD>`
 - `--user <USERNAME>`
 - `-v, --verbose`
+
+`--once` skips the interactive TUI. It performs one polling pass for explicit
+targets, runs autodiscovery/verification for any configured discovery hosts,
+prints the overview table to stdout, and exits.
 
 Version output includes build metadata:
 

@@ -23,6 +23,7 @@ pub struct LaunchConfig {
     pub settings: RuntimeSettings,
     pub targets: Vec<Target>,
     pub discovery_targets: Vec<DiscoveryTarget>,
+    pub once: bool,
     pub verbose: bool,
     pub config_path: Option<PathBuf>,
     pub no_default_config: bool,
@@ -74,6 +75,9 @@ struct Cli {
     #[arg(long = "no-config")]
     no_config: bool,
 
+    #[arg(long = "once")]
+    once: bool,
+
     #[arg(short = 'a', long = "auth", value_name = "PASSWORD")]
     auth: Option<String>,
 
@@ -106,8 +110,11 @@ enum CliSortMode {
 
 #[allow(clippy::too_many_lines)]
 pub fn build_launch_config() -> Result<LaunchConfig> {
-    let args = Cli::parse();
+    build_launch_config_from(Cli::parse())
+}
 
+#[allow(clippy::too_many_lines)]
+fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
     let base_settings = config::default_settings();
     let loaded_config = config::load_config(args.config.as_deref(), args.no_config)?;
     let mut merged_targets = loaded_config.targets.clone();
@@ -235,6 +242,7 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
         settings,
         targets: merged_targets,
         discovery_targets,
+        once: args.once,
         verbose: args.verbose,
         config_path: args.config,
         no_default_config: args.no_config,
@@ -344,6 +352,8 @@ fn dedupe_discovery_targets(input: Vec<DiscoveryTarget>) -> Vec<DiscoveryTarget>
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::{DiscoveryTarget, VERSION, build_discovery_targets, dedupe_discovery_targets};
     use crate::model::{Target, TargetProtocol};
 
@@ -432,5 +442,13 @@ mod tests {
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].host, "127.0.0.1");
+    }
+
+    #[test]
+    fn once_flag_enables_non_interactive_launch() {
+        let cli = super::Cli::parse_from(["reditop", "--once"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert!(launch.once);
     }
 }
