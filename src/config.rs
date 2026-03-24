@@ -23,6 +23,7 @@ struct GlobalConfig {
     concurrency_limit: Option<usize>,
     view_default: Option<String>,
     sort_default: Option<String>,
+    still_autodiscover: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -60,6 +61,13 @@ pub struct RuntimeOverrides {
     pub ui_theme: Option<UiTheme>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LoadedConfig {
+    pub overrides: RuntimeOverrides,
+    pub targets: Vec<Target>,
+    pub still_autodiscover: bool,
+}
+
 pub fn default_settings() -> RuntimeSettings {
     RuntimeSettings {
         refresh_interval: std::time::Duration::from_secs(1),
@@ -72,14 +80,15 @@ pub fn default_settings() -> RuntimeSettings {
     }
 }
 
-pub fn load_config(
-    path: Option<&Path>,
-    no_default_config: bool,
-) -> Result<(RuntimeOverrides, Vec<Target>)> {
+pub fn load_config(path: Option<&Path>, no_default_config: bool) -> Result<LoadedConfig> {
     let maybe_path = resolve_config_path(path, no_default_config);
 
     let Some(path) = maybe_path else {
-        return Ok((RuntimeOverrides::default(), Vec::new()));
+        return Ok(LoadedConfig {
+            overrides: RuntimeOverrides::default(),
+            targets: Vec::new(),
+            still_autodiscover: true,
+        });
     };
 
     let content = fs::read_to_string(&path)
@@ -128,8 +137,8 @@ pub fn load_config(
     }
 
     let global = parsed.global.unwrap_or_default();
-    Ok((
-        RuntimeOverrides {
+    Ok(LoadedConfig {
+        overrides: RuntimeOverrides {
             refresh_interval_ms: global.refresh_interval_ms,
             connect_timeout_ms: global.connect_timeout_ms,
             command_timeout_ms: global.command_timeout_ms,
@@ -139,7 +148,8 @@ pub fn load_config(
             ui_theme: parse_theme(parsed.theme)?,
         },
         targets,
-    ))
+        still_autodiscover: global.still_autodiscover.unwrap_or(true),
+    })
 }
 
 pub fn apply_overrides(mut base: RuntimeSettings, overrides: &RuntimeOverrides) -> RuntimeSettings {
@@ -305,10 +315,13 @@ fn parse_color(raw: &str, field: &str) -> Result<UiColor> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::{LazyLock, Mutex};
     use std::time::Duration;
 
     use super::{apply_overrides, default_settings, load_config, resolve_config_path};
     use crate::model::{TargetProtocol, UiColor, UiTheme};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn default_settings_include_default_theme() {
@@ -333,7 +346,9 @@ critical_color = "red"
         )
         .expect("write config");
 
-        let (overrides, targets) = load_config(Some(&path), false).expect("load config");
+        let loaded = load_config(Some(&path), false).expect("load config");
+        let overrides = loaded.overrides;
+        let targets = loaded.targets;
         assert!(targets.is_empty());
 
         let settings = apply_overrides(default_settings(), &overrides);
@@ -358,7 +373,9 @@ foreground_color = "cyan"
         )
         .expect("write config");
 
-        let (overrides, _) = load_config(Some(&path), false).expect("load config");
+        let overrides = load_config(Some(&path), false)
+            .expect("load config")
+            .overrides;
         let settings = apply_overrides(default_settings(), &overrides);
         assert_eq!(settings.ui_theme.background, UiColor::Black);
         assert_eq!(settings.ui_theme.foreground, UiColor::Cyan);
@@ -367,6 +384,7 @@ foreground_color = "cyan"
 
     #[test]
     fn load_config_supports_user_alias_and_password_env() {
+        let _env_lock = ENV_LOCK.lock().expect("env lock");
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("config.toml");
         // SAFETY: tests control this process environment for the duration of the assertion.
@@ -384,12 +402,19 @@ password_env = "REDITOP_TEST_PASSWORD"
         )
         .expect("write config");
 
-        let (_, targets) = load_config(Some(&path), false).expect("load config");
+        let targets = load_config(Some(&path), false)
+            .expect("load config")
+            .targets;
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].addr, "127.0.0.1:6380");
         assert_eq!(targets[0].protocol, TargetProtocol::Tcp);
         assert_eq!(targets[0].username.as_deref(), Some("alice"));
         assert_eq!(targets[0].password.as_deref(), Some("secret"));
+
+        // SAFETY: restore the process environment before releasing the lock.
+        unsafe {
+            std::env::remove_var("REDITOP_TEST_PASSWORD");
+        }
     }
 
     #[test]
@@ -412,7 +437,42 @@ password_env = "REDITOP_TEST_PASSWORD"
     }
 
     #[test]
+    fn load_config_defaults_still_autodiscover_to_true() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[targets]]
+addr = "127.0.0.1:6379"
+"#,
+        )
+        .expect("write config");
+
+        let loaded = load_config(Some(&path), false).expect("load config");
+        assert!(loaded.still_autodiscover);
+    }
+
+    #[test]
+    fn load_config_parses_still_autodiscover_override() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r"
+[global]
+still_autodiscover = false
+",
+        )
+        .expect("write config");
+
+        let loaded = load_config(Some(&path), false).expect("load config");
+        assert!(!loaded.still_autodiscover);
+    }
+
+    #[test]
     fn resolve_config_path_prefers_flat_xdg_file() {
+        let _env_lock = ENV_LOCK.lock().expect("env lock");
         let dir = tempfile::tempdir().expect("temp dir");
         let xdg = dir.path().join("xdg");
         std::fs::create_dir_all(&xdg).expect("xdg dir");

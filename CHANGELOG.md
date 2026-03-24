@@ -4,6 +4,8 @@
 
 - Add richer Redis instance statuses such as `PROTECTED` and `AUTH`, and show
   full server-reported error details in the detail summary view.
+- Add `[global].still_autodiscover`, defaulting to `true`, so config-defined
+  targets can provide credentials without disabling background autodiscovery.
 
 ### Changed
 

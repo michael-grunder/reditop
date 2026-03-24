@@ -109,10 +109,11 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
     let args = Cli::parse();
 
     let base_settings = config::default_settings();
-    let (file_overrides, mut merged_targets) =
-        config::load_config(args.config.as_deref(), args.no_config)?;
+    let loaded_config = config::load_config(args.config.as_deref(), args.no_config)?;
+    let mut merged_targets = loaded_config.targets.clone();
+    let config_target_count = merged_targets.len();
 
-    let mut settings = config::apply_overrides(base_settings, &file_overrides);
+    let mut settings = config::apply_overrides(base_settings, &loaded_config.overrides);
 
     if let Some(refresh) = args.refresh.as_deref() {
         settings.refresh_interval = humantime::parse_duration(refresh)?;
@@ -223,6 +224,8 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
     merged_targets = dedupe_targets(merged_targets);
     let discovery_targets = dedupe_discovery_targets(build_discovery_targets(
         &merged_targets,
+        config_target_count,
+        loaded_config.still_autodiscover,
         &args.discovery_hosts,
         args.user.clone(),
         args.auth.clone(),
@@ -269,6 +272,8 @@ fn dedupe_targets(input: Vec<Target>) -> Vec<Target> {
 
 fn build_discovery_targets(
     explicit_targets: &[Target],
+    config_target_count: usize,
+    config_still_autodiscover: bool,
     discovery_hosts: &[String],
     username: Option<String>,
     password: Option<String>,
@@ -296,7 +301,11 @@ fn build_discovery_targets(
             }),
     );
 
-    if out.is_empty() && explicit_targets.is_empty() {
+    let cli_has_explicit_targets = explicit_targets.len() > config_target_count;
+    let only_config_targets = !explicit_targets.is_empty() && !cli_has_explicit_targets;
+    let allow_default_autodiscovery = config_still_autodiscover || !only_config_targets;
+
+    if out.is_empty() && !cli_has_explicit_targets && allow_default_autodiscovery {
         out.push(DiscoveryTarget::localhost(username, password));
     }
 
@@ -335,7 +344,8 @@ fn dedupe_discovery_targets(input: Vec<DiscoveryTarget>) -> Vec<DiscoveryTarget>
 
 #[cfg(test)]
 mod tests {
-    use super::VERSION;
+    use super::{DiscoveryTarget, VERSION, build_discovery_targets, dedupe_discovery_targets};
+    use crate::model::{Target, TargetProtocol};
 
     #[test]
     fn version_string_contains_build_metadata() {
@@ -343,5 +353,84 @@ mod tests {
         assert!(VERSION.contains(" ["));
         assert!(VERSION.contains("] ("));
         assert!(VERSION.ends_with(')'));
+    }
+
+    #[test]
+    fn discovery_defaults_to_localhost_when_only_config_targets_are_present() {
+        let targets = vec![Target {
+            alias: Some("saved".to_string()),
+            addr: "127.0.0.1:6380".to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: Some("default".to_string()),
+            password: Some("secret".to_string()),
+            tags: Vec::new(),
+        }];
+
+        let discovered = build_discovery_targets(&targets, targets.len(), true, &[], None, None);
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(
+            discovered[0],
+            DiscoveryTarget::localhost(Some("default".to_string()), Some("secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn discovery_can_be_disabled_when_only_config_targets_are_present() {
+        let targets = vec![Target {
+            alias: Some("saved".to_string()),
+            addr: "127.0.0.1:6380".to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: Some("default".to_string()),
+            password: Some("secret".to_string()),
+            tags: Vec::new(),
+        }];
+
+        let discovered = dedupe_discovery_targets(build_discovery_targets(
+            &targets,
+            targets.len(),
+            false,
+            &[],
+            None,
+            None,
+        ));
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(
+            discovered[0],
+            DiscoveryTarget::localhost(Some("default".to_string()), Some("secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn explicit_cli_targets_still_disable_default_discovery() {
+        let config_target = Target {
+            alias: Some("saved".to_string()),
+            addr: "127.0.0.1:6380".to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: Some("default".to_string()),
+            password: Some("secret".to_string()),
+            tags: Vec::new(),
+        };
+        let cli_target = Target {
+            alias: None,
+            addr: "127.0.0.1:6379".to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: None,
+            password: None,
+            tags: Vec::new(),
+        };
+
+        let discovered = dedupe_discovery_targets(build_discovery_targets(
+            &[config_target, cli_target],
+            1,
+            true,
+            &[],
+            None,
+            None,
+        ));
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].host, "127.0.0.1");
     }
 }

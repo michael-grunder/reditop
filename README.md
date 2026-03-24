@@ -193,6 +193,7 @@ command_timeout_ms = 500
 concurrency_limit = 16
 view_default = "tree"
 sort_default = "address"
+still_autodiscover = true
 
 [theme]
 background_color = "black"
@@ -247,6 +248,11 @@ dir = "desc"
 
 `[theme]` colors support: `black`, `red`, `green`, `yellow`, `blue`,
 `magenta`, `cyan`, `gray`/`grey`, `white`.
+
+`[global].still_autodiscover` defaults to `true`. Leave it enabled if you want
+saved targets to provide credentials or fixed instances without suppressing
+background autodiscovery. Set it to `false` if config-defined `[[targets]]`
+should behave like an explicit fixed target list.
 
 `[[targets]]` accepts `user` or `username`, plus either `password` or
 `password_env`. If you omit the host from a TCP `addr`, `reditop` assumes
