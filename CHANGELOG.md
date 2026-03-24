@@ -25,6 +25,8 @@
 
 ### Fixed
 
+- Update the CI Zig installation step to use `mlugg/setup-zig@v2.2.1`,
+  fixing musl `cargo zigbuild` jobs that were still pinned to `v1`.
 - Keep autodiscovery active when config-defined TCP targets provide credentials
   by reusing those credentials only for exact matching endpoints instead of
   applying them to every discovered port on the same host.
