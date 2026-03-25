@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::column::{Emphasis, RenderCtx, SortCtx, SortKey};
+use crate::column::{Emphasis, EmphasisLifetime, RenderCtx, SortCtx, SortKey};
 use crate::discovery::{DiscoveryEvent, DiscoveryStatus, VerifiedInstance};
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortDirection, ViewMode};
 use crate::registry::ColumnRegistry;
@@ -85,6 +85,8 @@ pub struct AppState {
     pub column_registry: ColumnRegistry,
     pub runtime_overview_column_order: Vec<String>,
     pub runtime_visible_overview: Vec<String>,
+    pending_transient_emphasis: HashMap<String, String>,
+    transient_emphasis_records: HashMap<String, SortKey>,
 }
 
 struct TreeRenderCtx<'a> {
@@ -121,11 +123,15 @@ impl AppState {
             runtime_overview_column_order: column_registry.available_overview_columns(),
             runtime_visible_overview: column_registry.default_visible_overview_columns(),
             column_registry,
+            pending_transient_emphasis: HashMap::new(),
+            transient_emphasis_records: HashMap::new(),
         }
     }
 
     pub fn apply_update(&mut self, update: InstanceState) {
-        self.instances.insert(update.key.clone(), update);
+        let key = update.key.clone();
+        self.instances.insert(key.clone(), update);
+        self.track_transient_emphasis(&key);
         self.clamp_selection();
     }
 
@@ -513,9 +519,12 @@ impl AppState {
         Some(column.render_cell(&ctx).text)
     }
 
-    pub fn emphasized_rows_by_column(&self, rows: &[DisplayRow]) -> HashMap<String, String> {
+    pub fn take_emphasized_rows_by_column(
+        &mut self,
+        rows: &[DisplayRow],
+    ) -> HashMap<String, String> {
         let cluster_labels = self.cluster_labels();
-        let mut emphasized = HashMap::new();
+        let mut emphasized = std::mem::take(&mut self.pending_transient_emphasis);
 
         for column_key in self.visible_column_keys() {
             let Some(column) = self.column_registry.column(&column_key) else {
@@ -524,6 +533,9 @@ impl AppState {
             let Some(rule) = column.emphasis() else {
                 continue;
             };
+            if column.emphasis_lifetime() == EmphasisLifetime::TransientRecord {
+                continue;
+            }
 
             let winner = rows
                 .iter()
@@ -552,6 +564,46 @@ impl AppState {
         }
 
         emphasized
+    }
+
+    fn track_transient_emphasis(&mut self, updated_key: &str) {
+        let cluster_labels = self.cluster_labels();
+        let Some(node) = self.instances.get(updated_key) else {
+            return;
+        };
+
+        for column_key in self.runtime_overview_column_order.clone() {
+            let Some(column) = self.column_registry.column(&column_key) else {
+                continue;
+            };
+            let Some(rule) = column.emphasis() else {
+                continue;
+            };
+            if column.emphasis_lifetime() != EmphasisLifetime::TransientRecord {
+                continue;
+            }
+
+            let sort_ctx = self.sort_ctx(node, &cluster_labels);
+            let sort_key = column.sort_key(&sort_ctx);
+            if matches!(sort_key, SortKey::Null) {
+                continue;
+            }
+
+            let should_replace =
+                self.transient_emphasis_records
+                    .get(&column_key)
+                    .is_none_or(|best| match rule {
+                        Emphasis::Max => sort_key.compare(best).is_gt(),
+                        Emphasis::Min => sort_key.compare(best).is_lt(),
+                    });
+
+            if should_replace {
+                self.transient_emphasis_records
+                    .insert(column_key.clone(), sort_key);
+                self.pending_transient_emphasis
+                    .insert(column_key, updated_key.to_string());
+            }
+        }
     }
 
     fn build_tree_rows(
@@ -1335,10 +1387,41 @@ mod tests {
         app.apply_update(c);
 
         let rows = app.visible_rows();
-        let emphasized = app.emphasized_rows_by_column(&rows);
+        let emphasized = app.take_emphasized_rows_by_column(&rows);
 
         assert_eq!(emphasized.get("lat_last"), Some(&"b".to_string()));
         assert_eq!(emphasized.get("lat_max"), Some(&"c".to_string()));
+    }
+
+    #[test]
+    fn max_latency_emphasis_is_only_emitted_for_the_record_frame() {
+        let mut app = app();
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.max_latency_ms = 1.4;
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.max_latency_ms = 2.1;
+
+        app.apply_update(a);
+        app.apply_update(b);
+
+        let rows = app.visible_rows();
+        let emphasized = app.take_emphasized_rows_by_column(&rows);
+        assert_eq!(emphasized.get("lat_max"), Some(&"b".to_string()));
+
+        let rows = app.visible_rows();
+        let emphasized = app.take_emphasized_rows_by_column(&rows);
+        assert_eq!(emphasized.get("lat_max"), None);
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.max_latency_ms = 2.6;
+        app.apply_update(b);
+
+        let rows = app.visible_rows();
+        let emphasized = app.take_emphasized_rows_by_column(&rows);
+        assert_eq!(emphasized.get("lat_max"), Some(&"b".to_string()));
     }
 
     #[test]

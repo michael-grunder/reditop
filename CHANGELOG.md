@@ -25,6 +25,9 @@
 
 ### Fixed
 
+- Make `LatMax` overview emphasis flash only on frames where a new overall
+  maximum is first observed, instead of keeping the current record holder
+  highlighted indefinitely.
 - Update the CI Zig installation step to use `mlugg/setup-zig@v2.2.1`,
   fixing musl `cargo zigbuild` jobs that were still pinned to `v1`.
 - Keep autodiscovery active when config-defined TCP targets provide credentials

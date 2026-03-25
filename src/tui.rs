@@ -134,7 +134,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
 
         maybe_request_bigkeys_scan(&mut app, &request_tx);
 
-        terminal.draw(|frame| draw(frame, &app))?;
+        terminal.draw(|frame| draw(frame, &mut app))?;
 
         if app.should_quit {
             break;
@@ -496,7 +496,7 @@ fn handle_primary_view_quit_key(app: &mut AppState, key: KeyEvent) -> bool {
     true
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, app: &AppState) {
+fn draw(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
     let area = frame.area();
     frame.render_widget(Block::default().style(base_style(app)), area);
     let chunks = Layout::default()
@@ -630,7 +630,7 @@ fn style_from_emphasis(emphasis_style: EmphasisStyle) -> Style {
 }
 
 #[allow(clippy::too_many_lines)]
-fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
+fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
     const TABLE_COLUMN_SPACING: u16 = 1;
 
     let chunks = Layout::default()
@@ -670,7 +670,7 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     let rows = app.visible_rows();
     let column_keys = app.visible_column_keys();
     let cluster_labels = app.cluster_labels();
-    let emphasized = app.emphasized_rows_by_column(&rows);
+    let emphasized = app.take_emphasized_rows_by_column(&rows);
     let columns: Vec<_> = column_keys
         .iter()
         .filter_map(|key| app.column_registry.column(key.as_str()))
@@ -2230,7 +2230,7 @@ mod tests {
         let backend = TestBackend::new(100, 16);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("overview draw succeeds");
 
         let buffer = terminal.backend().buffer().clone();
@@ -2324,7 +2324,7 @@ mod tests {
         let backend = TestBackend::new(100, 16);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2377,7 +2377,7 @@ mod tests {
         let backend = TestBackend::new(100, 16);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2411,7 +2411,7 @@ mod tests {
         let backend = TestBackend::new(100, 18);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2460,7 +2460,7 @@ mod tests {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2506,7 +2506,7 @@ mod tests {
         let backend = TestBackend::new(100, 16);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2540,7 +2540,7 @@ mod tests {
         let backend = TestBackend::new(100, 16);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2590,7 +2590,7 @@ mod tests {
         let backend = TestBackend::new(120, 28);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
@@ -2648,7 +2648,7 @@ mod tests {
         let backend = TestBackend::new(100, 12);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("overview draw succeeds");
 
         let buffer = terminal.backend().buffer().clone();
@@ -2736,7 +2736,7 @@ underlined = true
         let backend = TestBackend::new(100, 12);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
-            .draw(|frame| draw(frame, &app))
+            .draw(|frame| draw(frame, &mut app))
             .expect("overview draw succeeds");
 
         let buffer = terminal.backend().buffer().clone();
@@ -2780,6 +2780,97 @@ underlined = true
             "latency winner should inherit global italic"
         );
         assert_eq!(buffer.content()[lat_max_idx].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn overview_only_flashes_latency_max_on_record_frames() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r"
+[columns.lat_max.emphasis_style]
+underlined = true
+",
+        )
+        .expect("write config");
+
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(Some(&path), false, crate::model::SortMode::Address),
+        );
+        app.view_mode = ViewMode::Flat;
+
+        let mut a = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        a.max_latency_ms = 1.4;
+        a.status = Status::Ok;
+        a.last_updated = Some(std::time::Instant::now());
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.max_latency_ms = 2.1;
+        b.status = Status::Ok;
+        b.last_updated = Some(std::time::Instant::now());
+
+        app.apply_update(a);
+        app.apply_update(b);
+
+        let backend = TestBackend::new(100, 12);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("first overview draw succeeds");
+        let first_buffer = terminal.backend().buffer().clone();
+        let first_lines = buffer_lines(&first_buffer);
+        let lat_row = first_lines
+            .iter()
+            .position(|line| line.contains("6380") && line.contains("2.10"))
+            .expect("latency max row rendered");
+        let lat_col = char_column(&first_lines[lat_row], "2.10");
+        let width = usize::from(first_buffer.area.width);
+        let lat_max_idx = lat_row * width + lat_col;
+        assert!(
+            first_buffer.content()[lat_max_idx]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "record-setting frame should emphasize the new latency max"
+        );
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("second overview draw succeeds");
+        let second_buffer = terminal.backend().buffer().clone();
+        assert!(
+            !second_buffer.content()[lat_max_idx]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "latency max emphasis should clear on the next frame without a new record"
+        );
+
+        let mut b = InstanceState::new("b".into(), "127.0.0.1:6380".into());
+        b.max_latency_ms = 2.6;
+        b.status = Status::Ok;
+        b.last_updated = Some(std::time::Instant::now());
+        app.apply_update(b);
+
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("third overview draw succeeds");
+        let third_buffer = terminal.backend().buffer().clone();
+        let third_lines = buffer_lines(&third_buffer);
+        let lat_row = third_lines
+            .iter()
+            .position(|line| line.contains("6380") && line.contains("2.60"))
+            .expect("updated latency max row rendered");
+        let lat_col = char_column(&third_lines[lat_row], "2.60");
+        let width = usize::from(third_buffer.area.width);
+        let lat_max_idx = lat_row * width + lat_col;
+        assert!(
+            third_buffer.content()[lat_max_idx]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "a later record should be emphasized again"
+        );
     }
 
     #[test]

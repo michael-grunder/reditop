@@ -34,6 +34,13 @@ pub enum Emphasis {
     Min,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmphasisLifetime {
+    #[default]
+    PersistentWinner,
+    TransientRecord,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EmphasisStyle {
@@ -119,6 +126,9 @@ pub trait Column: Send + Sync {
     fn sort_key(&self, ctx: &SortCtx<'_>) -> SortKey;
     fn emphasis(&self) -> Option<Emphasis> {
         None
+    }
+    fn emphasis_lifetime(&self) -> EmphasisLifetime {
+        EmphasisLifetime::PersistentWinner
     }
     fn emphasis_style(&self) -> Option<EmphasisStyle> {
         None
