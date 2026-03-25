@@ -10,6 +10,9 @@
   background autodiscovery on localhost or a specific host.
 - Add `--once` to print the overview status table a single time for polled and
   autodiscovered instances, then exit without starting the interactive TUI.
+- Add scrolling and `/` filtering to the text-based detail panes (`Summary`,
+  `Latency`, and `Info Raw`) so long `INFO` output can be navigated and narrowed
+  in place.
 
 ### Changed
 

@@ -31,7 +31,7 @@
 - `F7`: open overview column picker for toggling and reordering visible columns
 - `H`: open full help page
 - `?`: toggle help
-- `Up/Down`: move selection in overview, or scroll/paginate `Commandstats` and `Bigkeys` in detail view
+- `Up/Down`: move selection in overview, or scroll the active detail pane when it has more rows than fit
 - `Enter`: open detail
 - `Esc`: quit from the overview, close the active overlay window, go back from detail/help, or stop filter editing
 - `Tab` / `Left` / `Right`: cycle detail tabs
@@ -41,7 +41,7 @@
 - `v`: open overview column picker
 - `Shift+Up/Down`: reorder columns inside the overview column picker
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
-- `/`: start filter input in overview, or filter `Commandstats` or `Bigkeys` rows in detail view
+- `/`: start filter input in overview, or filter the active detail pane in detail view (`Summary`, `Latency`, `Info Raw`, `Commandstats`, or `Bigkeys`)
 - `r` / `R`: refresh now, or rerun the on-demand `Bigkeys` scan while that tab is open
 
 The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace with

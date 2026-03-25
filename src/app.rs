@@ -58,6 +58,13 @@ pub struct BigkeysViewState {
     pub scroll_offset: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailTextViewState {
+    pub filter: String,
+    pub is_filtering: bool,
+    pub scroll_offset: usize,
+}
+
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppState {
     pub settings: RuntimeSettings,
@@ -76,6 +83,9 @@ pub struct AppState {
     pub previous_view: ActiveView,
     pub selected_index: usize,
     pub detail_tab: usize,
+    pub summary_view: DetailTextViewState,
+    pub latency_view: DetailTextViewState,
+    pub info_raw_view: DetailTextViewState,
     pub commandstats_view: CommandstatsViewState,
     pub bigkeys_view: BigkeysViewState,
     pub force_show_host: bool,
@@ -114,6 +124,9 @@ impl AppState {
             previous_view: ActiveView::Overview,
             selected_index: 0,
             detail_tab: 0,
+            summary_view: DetailTextViewState::default(),
+            latency_view: DetailTextViewState::default(),
+            info_raw_view: DetailTextViewState::default(),
             commandstats_view: CommandstatsViewState::default(),
             bigkeys_view: BigkeysViewState::default(),
             force_show_host: false,
@@ -257,6 +270,89 @@ impl AppState {
         let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
         let next = (current + delta).clamp(0, max_index);
         self.bigkeys_view.scroll_offset = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub const fn detail_text_view(&self, detail_tab: usize) -> Option<&DetailTextViewState> {
+        match detail_tab {
+            0 => Some(&self.summary_view),
+            1 => Some(&self.latency_view),
+            2 => Some(&self.info_raw_view),
+            _ => None,
+        }
+    }
+
+    pub const fn detail_text_view_mut(
+        &mut self,
+        detail_tab: usize,
+    ) -> Option<&mut DetailTextViewState> {
+        match detail_tab {
+            0 => Some(&mut self.summary_view),
+            1 => Some(&mut self.latency_view),
+            2 => Some(&mut self.info_raw_view),
+            _ => None,
+        }
+    }
+
+    pub fn start_detail_text_filter_input(&mut self, clear_existing: bool) {
+        let detail_tab = self.detail_tab;
+        if let Some(view) = self.detail_text_view_mut(detail_tab) {
+            if clear_existing {
+                view.filter.clear();
+            }
+            view.is_filtering = true;
+            view.scroll_offset = 0;
+        }
+    }
+
+    pub fn visible_detail_text_lines<'a>(
+        &self,
+        detail_tab: usize,
+        lines: &'a [String],
+    ) -> Vec<&'a str> {
+        let needle = self
+            .detail_text_view(detail_tab)
+            .map_or("", |view| view.filter.trim())
+            .to_ascii_lowercase();
+        lines
+            .iter()
+            .filter_map(|line| {
+                if needle.is_empty() || line.to_ascii_lowercase().contains(&needle) {
+                    Some(line.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn clamp_detail_text_scroll(
+        &mut self,
+        detail_tab: usize,
+        rows_len: usize,
+        page_len: usize,
+    ) {
+        let max_offset = rows_len.saturating_sub(page_len.max(1));
+        if let Some(view) = self.detail_text_view_mut(detail_tab)
+            && view.scroll_offset > max_offset
+        {
+            view.scroll_offset = max_offset;
+        }
+    }
+
+    pub fn move_detail_text_scroll(
+        &mut self,
+        detail_tab: usize,
+        delta: isize,
+        rows_len: usize,
+        page_len: usize,
+    ) {
+        let max_offset = rows_len.saturating_sub(page_len.max(1));
+        if let Some(view) = self.detail_text_view_mut(detail_tab) {
+            let current = isize::try_from(view.scroll_offset).unwrap_or(isize::MAX);
+            let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
+            let next = (current + delta).clamp(0, max_index);
+            view.scroll_offset = usize::try_from(next).unwrap_or(0);
+        }
     }
 
     pub fn start_bigkeys_filter_input(&mut self, clear_existing: bool) {
@@ -1543,5 +1639,50 @@ mod tests {
         let visible = app.visible_bigkeys(&entries);
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].key, "session:1");
+    }
+
+    #[test]
+    fn start_detail_text_filter_input_sets_clear_behavior() {
+        let mut app = app();
+        app.detail_tab = 2;
+        app.info_raw_view.filter = "run_id".to_string();
+
+        app.start_detail_text_filter_input(false);
+        assert!(app.info_raw_view.is_filtering);
+        assert_eq!(app.info_raw_view.filter, "run_id");
+
+        app.start_detail_text_filter_input(true);
+        assert!(app.info_raw_view.is_filtering);
+        assert!(app.info_raw_view.filter.is_empty());
+        assert_eq!(app.info_raw_view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn visible_detail_text_lines_filters_case_insensitively() {
+        let mut app = app();
+        app.detail_tab = 2;
+        app.info_raw_view.filter = "RUN_ID".to_string();
+
+        let lines = vec![
+            "# Server".to_string(),
+            "run_id:abc123".to_string(),
+            "redis_version:8.0.0".to_string(),
+        ];
+
+        let visible = app.visible_detail_text_lines(2, &lines);
+        assert_eq!(visible, vec!["run_id:abc123"]);
+    }
+
+    #[test]
+    fn detail_text_scroll_is_clamped_to_visible_page() {
+        let mut app = app();
+        app.detail_tab = 0;
+        app.summary_view.scroll_offset = 10;
+
+        app.clamp_detail_text_scroll(0, 4, 3);
+        assert_eq!(app.summary_view.scroll_offset, 1);
+
+        app.move_detail_text_scroll(0, -5, 4, 3);
+        assert_eq!(app.summary_view.scroll_offset, 0);
     }
 }

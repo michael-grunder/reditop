@@ -222,6 +222,26 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
+            if let Some(view) = app.detail_text_view_mut(app.detail_tab)
+                && view.is_filtering
+            {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        view.is_filtering = false;
+                    }
+                    KeyCode::Backspace => {
+                        let _ = view.filter.pop();
+                        sync_detail_views(&mut app, terminal.size()?.height);
+                    }
+                    KeyCode::Char(ch) => {
+                        view.filter.push(ch);
+                        sync_detail_views(&mut app, terminal.size()?.height);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if app.is_sort_picker_open() {
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => app.close_overview_modal(),
@@ -278,6 +298,10 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                     app.start_bigkeys_filter_input(false);
                     sync_bigkeys_view(&mut app, terminal.size()?.height);
                 }
+                KeyCode::Char('/') if is_detail_text_tab(&app) => {
+                    app.start_detail_text_filter_input(false);
+                    sync_detail_views(&mut app, terminal.size()?.height);
+                }
                 KeyCode::Char('r' | 'R') => {
                     let request = if is_bigkeys_detail(&app) {
                         app.selected_key().map(|key| {
@@ -319,6 +343,22 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                         app.move_bigkeys_scroll(1, visible_len, page_len);
                     }
                 }
+                KeyCode::Up if is_detail_text_tab(&app) => {
+                    let page_len = detail_text_page_len(terminal.size()?.height);
+                    let row_count = current_detail_text_body(&app).map_or(0, |body| {
+                        let lines = detail_text_lines(&body);
+                        app.visible_detail_text_lines(app.detail_tab, &lines).len()
+                    });
+                    app.move_detail_text_scroll(app.detail_tab, -1, row_count, page_len);
+                }
+                KeyCode::Down if is_detail_text_tab(&app) => {
+                    let page_len = detail_text_page_len(terminal.size()?.height);
+                    let row_count = current_detail_text_body(&app).map_or(0, |body| {
+                        let lines = detail_text_lines(&body);
+                        app.visible_detail_text_lines(app.detail_tab, &lines).len()
+                    });
+                    app.move_detail_text_scroll(app.detail_tab, 1, row_count, page_len);
+                }
                 KeyCode::Enter if app.active_view == ActiveView::Overview => {
                     if app.selected_key().is_some() {
                         app.active_view = ActiveView::Detail;
@@ -328,6 +368,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::Char('q') | KeyCode::Esc
                     if handle_primary_view_quit_key(&mut app, key) => {}
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
+                    app.summary_view.is_filtering = false;
+                    app.latency_view.is_filtering = false;
+                    app.info_raw_view.is_filtering = false;
                     app.commandstats_view.is_filtering = false;
                     app.bigkeys_view.is_filtering = false;
                     app.active_view = ActiveView::Overview;
@@ -367,12 +410,40 @@ fn current_bigkeys(app: &AppState) -> Option<&crate::model::BigkeysMetrics> {
     Some(&instance.detail.bigkeys)
 }
 
+fn current_detail_text_body(app: &AppState) -> Option<String> {
+    let key = app.selected_key()?;
+    let instance = app.instances.get(&key)?;
+    Some(detail_text_body(instance, app.detail_tab))
+}
+
 fn is_commandstats_detail(app: &AppState) -> bool {
     app.active_view == ActiveView::Detail && app.detail_tab == 3
 }
 
 fn is_bigkeys_detail(app: &AppState) -> bool {
     app.active_view == ActiveView::Detail && app.detail_tab == 4
+}
+
+fn is_detail_text_tab(app: &AppState) -> bool {
+    app.active_view == ActiveView::Detail && app.detail_tab <= 2
+}
+
+fn sync_detail_text_view(app: &mut AppState, terminal_height: u16) {
+    let detail_tab = app.detail_tab;
+    let is_active_text_tab = app.active_view == ActiveView::Detail && detail_tab <= 2;
+    if !is_active_text_tab {
+        if let Some(view) = app.detail_text_view_mut(detail_tab) {
+            view.is_filtering = false;
+        }
+        return;
+    }
+
+    let page_len = detail_text_page_len(terminal_height);
+    let row_count = current_detail_text_body(app).map_or(0, |body| {
+        let lines = detail_text_lines(&body);
+        app.visible_detail_text_lines(detail_tab, &lines).len()
+    });
+    app.clamp_detail_text_scroll(detail_tab, row_count, page_len);
 }
 
 fn sync_commandstats_view(app: &mut AppState, terminal_height: u16) {
@@ -401,6 +472,7 @@ fn sync_bigkeys_view(app: &mut AppState, terminal_height: u16) {
 }
 
 fn sync_detail_views(app: &mut AppState, terminal_height: u16) {
+    sync_detail_text_view(app, terminal_height);
     sync_commandstats_view(app, terminal_height);
     sync_bigkeys_view(app, terminal_height);
 }
@@ -418,6 +490,14 @@ const fn bigkeys_page_len(area_height: u16) -> usize {
         1
     } else {
         area_height as usize - 5
+    }
+}
+
+const fn detail_text_page_len(area_height: u16) -> usize {
+    if area_height <= 2 {
+        1
+    } else {
+        area_height as usize - 2
     }
 }
 
@@ -999,122 +1079,33 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     match app.detail_tab {
         0 => {
-            let hits = instance.detail.keyspace_hits.unwrap_or(0);
-            let misses = instance.detail.keyspace_misses.unwrap_or(0);
-            let hit_rate = if hits + misses == 0 {
-                0.0
-            } else {
-                crate::column::u64_to_f64(hits) / crate::column::u64_to_f64(hits + misses) * 100.0
-            };
-            let replication_source = match (
-                instance.detail.master_host.as_deref(),
-                instance.detail.master_port,
-            ) {
-                (Some(host), Some(port)) => format!("{host}:{port}"),
-                (Some(host), None) => host.to_string(),
-                _ => "-".to_string(),
-            };
-            let mut body = format_aligned_rows(&[
-                ("status", instance.status.as_str().to_string()),
-                (
-                    "used_memory",
-                    format_optional_bytes(instance.used_memory_bytes),
-                ),
-                (
-                    "used_memory_rss",
-                    format_optional_bytes(instance.detail.used_memory_rss),
-                ),
-                ("maxmemory", format_optional_bytes(instance.maxmemory_bytes)),
-                ("ops_per_sec", format_optional_u64(instance.ops_per_sec)),
-                (
-                    "commands",
-                    format_optional_u64(instance.detail.total_commands_processed),
-                ),
-                (
-                    "connected_clients",
-                    format_optional_u64(instance.detail.connected_clients),
-                ),
-                (
-                    "blocked_clients",
-                    format_optional_u64(instance.detail.blocked_clients),
-                ),
-                ("hits", format_with_commas(hits)),
-                ("misses", format_with_commas(misses)),
-                ("hit_rate", format!("{hit_rate:.1}%")),
-                (
-                    "evicted_keys",
-                    format_optional_u64(instance.detail.evicted_keys),
-                ),
-                (
-                    "expired_keys",
-                    format_optional_u64(instance.detail.expired_keys),
-                ),
-                ("master", replication_source),
-            ]);
-            if let Some(details) = &instance.error_details {
-                let _ = write!(
-                    body,
-                    "\n\nerror_summary : {}\nerror_details : {}",
-                    details.summary, details.message
-                );
-            }
-            frame.render_widget(
-                Paragraph::new(body)
-                    .style(base_style(app))
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title("Summary")
-                            .style(base_style(app)),
-                    )
-                    .wrap(Wrap { trim: false }),
+            draw_detail_text(
+                frame,
+                app,
                 chunks[2],
+                0,
+                "Summary",
+                &detail_text_body(instance, 0),
             );
         }
         1 => {
-            let body = format_aligned_rows(&[
-                (
-                    "last_latency_ms",
-                    instance
-                        .last_latency_ms
-                        .map_or_else(|| "-".to_string(), |v| format!("{v:.2}")),
-                ),
-                ("max_latency_ms", format!("{:.2}", instance.max_latency_ms)),
-                ("avg_latency_ms", format!("{:.2}", instance.avg_latency_ms)),
-                (
-                    "window_samples",
-                    format_with_commas(instance.latency_window.len() as u64),
-                ),
-            ]);
-            frame.render_widget(
-                Paragraph::new(body).style(base_style(app)).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Latency")
-                        .style(base_style(app)),
-                ),
+            draw_detail_text(
+                frame,
+                app,
                 chunks[2],
+                1,
+                "Latency",
+                &detail_text_body(instance, 1),
             );
         }
-        2 => {
-            let body = instance
-                .detail
-                .raw_info
-                .clone()
-                .unwrap_or_else(|| "INFO not available".to_string());
-            frame.render_widget(
-                Paragraph::new(body)
-                    .style(base_style(app))
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title("Info Raw")
-                            .style(base_style(app)),
-                    )
-                    .wrap(Wrap { trim: false }),
-                chunks[2],
-            );
-        }
+        2 => draw_detail_text(
+            frame,
+            app,
+            chunks[2],
+            2,
+            "Info Raw",
+            &detail_text_body(instance, 2),
+        ),
         3 => draw_commandstats(frame, app, chunks[2], &instance.detail.commandstats),
         _ => draw_bigkeys(frame, app, chunks[2], &instance.detail.bigkeys),
     }
@@ -1424,6 +1415,169 @@ fn format_aligned_rows(rows: &[(&str, String)]) -> String {
         .join("\n")
 }
 
+fn detail_text_body(instance: &crate::model::InstanceState, detail_tab: usize) -> String {
+    match detail_tab {
+        0 => summary_detail_body(instance),
+        1 => latency_detail_body(instance),
+        2 => instance
+            .detail
+            .raw_info
+            .clone()
+            .unwrap_or_else(|| "INFO not available".to_string()),
+        _ => String::new(),
+    }
+}
+
+fn summary_detail_body(instance: &crate::model::InstanceState) -> String {
+    let hits = instance.detail.keyspace_hits.unwrap_or(0);
+    let misses = instance.detail.keyspace_misses.unwrap_or(0);
+    let hit_rate = if hits + misses == 0 {
+        0.0
+    } else {
+        crate::column::u64_to_f64(hits) / crate::column::u64_to_f64(hits + misses) * 100.0
+    };
+    let replication_source = match (
+        instance.detail.master_host.as_deref(),
+        instance.detail.master_port,
+    ) {
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        (Some(host), None) => host.to_string(),
+        _ => "-".to_string(),
+    };
+    let mut body = format_aligned_rows(&[
+        ("status", instance.status.as_str().to_string()),
+        (
+            "used_memory",
+            format_optional_bytes(instance.used_memory_bytes),
+        ),
+        (
+            "used_memory_rss",
+            format_optional_bytes(instance.detail.used_memory_rss),
+        ),
+        ("maxmemory", format_optional_bytes(instance.maxmemory_bytes)),
+        ("ops_per_sec", format_optional_u64(instance.ops_per_sec)),
+        (
+            "commands",
+            format_optional_u64(instance.detail.total_commands_processed),
+        ),
+        (
+            "connected_clients",
+            format_optional_u64(instance.detail.connected_clients),
+        ),
+        (
+            "blocked_clients",
+            format_optional_u64(instance.detail.blocked_clients),
+        ),
+        ("hits", format_with_commas(hits)),
+        ("misses", format_with_commas(misses)),
+        ("hit_rate", format!("{hit_rate:.1}%")),
+        (
+            "evicted_keys",
+            format_optional_u64(instance.detail.evicted_keys),
+        ),
+        (
+            "expired_keys",
+            format_optional_u64(instance.detail.expired_keys),
+        ),
+        ("master", replication_source),
+    ]);
+    if let Some(details) = &instance.error_details {
+        let _ = write!(
+            body,
+            "\n\nerror_summary : {}\nerror_details : {}",
+            details.summary, details.message
+        );
+    }
+    body
+}
+
+fn latency_detail_body(instance: &crate::model::InstanceState) -> String {
+    format_aligned_rows(&[
+        (
+            "last_latency_ms",
+            instance
+                .last_latency_ms
+                .map_or_else(|| "-".to_string(), |v| format!("{v:.2}")),
+        ),
+        ("max_latency_ms", format!("{:.2}", instance.max_latency_ms)),
+        ("avg_latency_ms", format!("{:.2}", instance.avg_latency_ms)),
+        (
+            "window_samples",
+            format_with_commas(instance.latency_window.len() as u64),
+        ),
+    ])
+}
+
+fn detail_text_lines(body: &str) -> Vec<String> {
+    body.lines().map(ToOwned::to_owned).collect()
+}
+
+fn detail_text_title(
+    app: &AppState,
+    detail_tab: usize,
+    base_title: &str,
+    start: usize,
+    end: usize,
+    total: usize,
+) -> String {
+    let mut title = if total == 0 {
+        base_title.to_string()
+    } else {
+        format!("{base_title} {}-{} / {}", start + 1, end, total)
+    };
+    if let Some(view) = app.detail_text_view(detail_tab)
+        && !view.filter.is_empty()
+    {
+        let _ = write!(title, "  filter=/{}", view.filter);
+    }
+    title
+}
+
+fn draw_detail_text(
+    frame: &mut ratatui::Frame<'_>,
+    app: &AppState,
+    area: Rect,
+    detail_tab: usize,
+    title: &str,
+    body: &str,
+) {
+    let lines = detail_text_lines(body);
+    let visible_lines = app.visible_detail_text_lines(detail_tab, &lines);
+    let page_len = detail_text_page_len(area.height);
+    let scroll_offset = app
+        .detail_text_view(detail_tab)
+        .map_or(0, |view| view.scroll_offset)
+        .min(visible_lines.len().saturating_sub(page_len.max(1)));
+    let end = (scroll_offset + page_len).min(visible_lines.len());
+    let title = detail_text_title(
+        app,
+        detail_tab,
+        title,
+        scroll_offset,
+        end,
+        visible_lines.len(),
+    );
+
+    let body = if visible_lines.is_empty() {
+        "No lines match the current filter".to_string()
+    } else {
+        visible_lines[scroll_offset..end].join("\n")
+    };
+
+    frame.render_widget(
+        Paragraph::new(body)
+            .style(base_style(app))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .style(base_style(app)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
 fn format_optional_u64(value: Option<u64>) -> String {
     value.map_or_else(|| "-".to_string(), format_with_commas)
 }
@@ -1487,6 +1641,12 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let prompt = if app.is_filtering {
         format!("{}: {}", app.filter_prompt_mode.label(), app.filter)
+    } else if app.summary_view.is_filtering {
+        format!("Summary Filter: /{}", app.summary_view.filter)
+    } else if app.latency_view.is_filtering {
+        format!("Latency Filter: /{}", app.latency_view.filter)
+    } else if app.info_raw_view.is_filtering {
+        format!("Info Raw Filter: /{}", app.info_raw_view.filter)
     } else if app.commandstats_view.is_filtering {
         format!("Commandstats Filter: /{}", app.commandstats_view.filter)
     } else if app.bigkeys_view.is_filtering {
@@ -1533,7 +1693,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ),
         (
             "Up/Down",
-            "Move selection in overview or scroll Commandstats/Bigkeys",
+            "Move selection in overview or scroll detail panes with long content",
         ),
         ("?", "Toggle help overlay"),
         ("r / R", "Refresh now, or rerun Bigkeys while on Bigkeys"),
@@ -1561,7 +1721,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ),
         (
             "/",
-            "Start filter input in overview, Commandstats, or Bigkeys",
+            "Start filter input in overview or the active detail pane",
         ),
         ("Backspace", "Delete filter character while editing"),
     ]
@@ -1578,7 +1738,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll Commandstats or Bigkeys\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview, Commandstats, or Bigkeys";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -2352,6 +2512,75 @@ mod tests {
             lrange_row < echo_row,
             "rows should be sorted by calls descending"
         );
+    }
+
+    #[test]
+    fn detail_info_raw_tab_filters_lines_and_shows_filter_in_title() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 2;
+        app.info_raw_view.filter = "run_id".into();
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.raw_info =
+            Some("# Server\nredis_version:8.0.0\nrun_id:abc123\nprocess_id:42".into());
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 16);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("Info Raw 1-1 / 1")));
+        assert!(lines.iter().any(|line| line.contains("filter=/run_id")));
+        assert!(lines.iter().any(|line| line.contains("run_id:abc123")));
+        assert!(!lines.iter().any(|line| line.contains("process_id:42")));
+    }
+
+    #[test]
+    fn detail_summary_tab_pages_lines_with_scroll_offset() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 0;
+        app.summary_view.scroll_offset = 2;
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.used_memory_bytes = Some(1_024);
+        instance.maxmemory_bytes = Some(4_096);
+        instance.ops_per_sec = Some(9);
+        instance.detail.used_memory_rss = Some(2_048);
+        instance.detail.total_commands_processed = Some(11);
+        instance.detail.connected_clients = Some(12);
+        instance.detail.blocked_clients = Some(13);
+        instance.detail.keyspace_hits = Some(14);
+        instance.detail.keyspace_misses = Some(15);
+        instance.detail.evicted_keys = Some(16);
+        instance.detail.expired_keys = Some(17);
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 14);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("Summary 3-6 / 14")));
+        assert!(!lines.iter().any(|line| line.contains("status           :")));
+        assert!(!lines.iter().any(|line| line.contains("used_memory      :")));
+        assert!(lines.iter().any(|line| line.contains("used_memory_rss")));
+        assert!(lines.iter().any(|line| line.contains("commands")));
+        assert!(!lines.iter().any(|line| line.contains("master           :")));
     }
 
     #[test]
