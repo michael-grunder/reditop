@@ -276,14 +276,15 @@ struct VerificationResult {
 #[allow(clippy::too_many_lines)]
 pub fn start(
     discovery_targets: Vec<DiscoveryTarget>,
-    seed_targets: Vec<Target>,
+    discovery_seed_targets: Vec<Target>,
+    configured_targets: Vec<Target>,
     settings: RuntimeSettings,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     let (event_tx, event_rx) = mpsc::channel(1024);
 
     tokio::spawn(async move {
-        let configured_credentials = credential_map(&seed_targets);
-        let seed_candidates = seed_targets
+        let configured_credentials = credential_map(&configured_targets);
+        let seed_candidates = discovery_seed_targets
             .into_iter()
             .filter(|target| target.protocol == TargetProtocol::Tcp)
             .filter_map(candidate_from_target)

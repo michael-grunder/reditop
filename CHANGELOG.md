@@ -6,11 +6,16 @@
   full server-reported error details in the detail summary view.
 - Add `[global].still_autodiscover`, defaulting to `true`, so config-defined
   targets can provide credentials without disabling background autodiscovery.
+- Add `--autodiscover[=<HOST>]` so explicit instance targets can opt back into
+  background autodiscovery on localhost or a specific host.
 - Add `--once` to print the overview status table a single time for polled and
   autodiscovered instances, then exit without starting the interactive TUI.
 
 ### Changed
 
+- Treat explicit CLI instances as fixed targets that disable autodiscovery by
+  default, while still treating host-only positional inputs as autodiscovery
+  hosts.
 - Shorten the autodiscovery footer to a compact in-progress spinner label and
   clear it automatically once discovery completes.
 - Add background Redis/Valkey autodiscovery with curated host port probing,
@@ -25,6 +30,8 @@
 
 ### Fixed
 
+- Stop adding host-only positional autodiscovery inputs such as
+  `192.168.0.174` to the TUI as a synthetic `DOWN` instance.
 - Record timed-out poll attempts as observed latency samples so `LatMax` and
   `LatLast` reflect command and connection timeouts instead of keeping the last
   successful latency.

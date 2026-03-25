@@ -1,13 +1,14 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
-use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use anyhow::{Result, bail};
+use clap::{ArgAction, Parser, ValueEnum};
 
 use crate::config;
 use crate::discovery::DiscoveryTarget;
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
-use crate::target_addr::normalize_tcp_addr;
+use crate::target_addr::{normalize_tcp_addr, tcp_port};
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -23,6 +24,7 @@ pub struct LaunchConfig {
     pub settings: RuntimeSettings,
     pub targets: Vec<Target>,
     pub discovery_targets: Vec<DiscoveryTarget>,
+    pub discovery_seed_targets: Vec<Target>,
     pub once: bool,
     pub verbose: bool,
     pub config_path: Option<PathBuf>,
@@ -48,8 +50,15 @@ struct Cli {
     #[arg(long = "cluster", value_name = "HOST:PORT")]
     cluster_targets: Vec<String>,
 
-    #[arg(long = "host", value_name = "HOST")]
-    discovery_hosts: Vec<String>,
+    #[arg(
+        long = "autodiscover",
+        visible_alias = "host",
+        value_name = "HOST",
+        num_args = 0..=1,
+        default_missing_value = "127.0.0.1",
+        action = ArgAction::Append
+    )]
+    autodiscover_hosts: Vec<String>,
 
     #[arg(short = 'c', long = "config", value_name = "PATH")]
     config: Option<PathBuf>,
@@ -155,32 +164,37 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
     }
 
     let mut cli_targets = Vec::new();
+    let mut positional_discovery_hosts = Vec::new();
+    for raw in &args.targets {
+        match parse_target_input(raw)? {
+            ParsedInput::Target(target) => cli_targets.push(target),
+            ParsedInput::DiscoveryHost(host) => positional_discovery_hosts.push(host),
+        }
+    }
+    cli_targets.extend(args.unix_targets.into_iter().map(|raw| Target {
+        alias: None,
+        addr: raw,
+        protocol: TargetProtocol::Unix,
+        username: args.user.clone(),
+        password: args.auth.clone(),
+        tags: Vec::new(),
+    }));
     cli_targets.extend(
-        args.targets
+        args.tcp_targets
             .into_iter()
-            .map(|raw| parse_target_string(&raw)),
+            .map(|raw| {
+                let addr = normalize_tcp_addr(&raw)?;
+                Ok(Target {
+                    alias: None,
+                    addr,
+                    protocol: TargetProtocol::Tcp,
+                    username: args.user.clone(),
+                    password: args.auth.clone(),
+                    tags: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
     );
-    cli_targets.extend(args.unix_targets.into_iter().map(|raw| {
-        Ok(Target {
-            alias: None,
-            addr: raw,
-            protocol: TargetProtocol::Unix,
-            username: args.user.clone(),
-            password: args.auth.clone(),
-            tags: Vec::new(),
-        })
-    }));
-    cli_targets.extend(args.tcp_targets.into_iter().map(|raw| {
-        let addr = normalize_tcp_addr(&raw)?;
-        Ok(Target {
-            alias: None,
-            addr,
-            protocol: TargetProtocol::Tcp,
-            username: args.user.clone(),
-            password: args.auth.clone(),
-            tags: Vec::new(),
-        })
-    }));
     let mut parsed_cluster_seeds: Vec<Target> = args
         .cluster_targets
         .into_iter()
@@ -206,8 +220,10 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
         }
     }
 
-    for maybe in cli_targets {
-        let mut parsed = maybe?;
+    let cli_has_explicit_targets = !cli_targets.is_empty() || !parsed_cluster_seeds.is_empty();
+    let discovery_seed_targets = dedupe_targets(parsed_cluster_seeds.clone());
+
+    for mut parsed in cli_targets {
         if parsed.username.is_none() {
             parsed.username.clone_from(&args.user);
         }
@@ -229,19 +245,29 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
     merged_targets.extend(parsed_cluster_seeds);
 
     merged_targets = dedupe_targets(merged_targets);
-    let discovery_targets = dedupe_discovery_targets(build_discovery_targets(
-        &merged_targets,
-        config_target_count,
-        loaded_config.still_autodiscover,
-        &args.discovery_hosts,
-        args.user.clone(),
-        args.auth.clone(),
-    ));
+    let default_mode = if cli_has_explicit_targets {
+        DiscoveryDefaultMode::Disabled
+    } else if merged_targets.is_empty()
+        || config_target_count == 0
+        || loaded_config.still_autodiscover
+    {
+        DiscoveryDefaultMode::Localhost
+    } else {
+        DiscoveryDefaultMode::Disabled
+    };
+    let discovery_targets = dedupe_discovery_targets(build_discovery_targets(&DiscoveryPlan {
+        default_mode,
+        positional_discovery_hosts: &positional_discovery_hosts,
+        autodiscover_hosts: &args.autodiscover_hosts,
+        username: args.user.clone(),
+        password: args.auth.clone(),
+    }));
 
     Ok(LaunchConfig {
         settings,
         targets: merged_targets,
         discovery_targets,
+        discovery_seed_targets,
         once: args.once,
         verbose: args.verbose,
         config_path: args.config,
@@ -268,6 +294,62 @@ fn parse_target_string(raw: &str) -> Result<Target> {
     })
 }
 
+#[derive(Debug, Clone)]
+enum ParsedInput {
+    Target(Target),
+    DiscoveryHost(String),
+}
+
+fn parse_target_input(raw: &str) -> Result<ParsedInput> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("target must not be empty");
+    }
+
+    if let Some(host) = parse_discovery_host(trimmed)? {
+        return Ok(ParsedInput::DiscoveryHost(host));
+    }
+
+    Ok(ParsedInput::Target(parse_target_string(trimmed)?))
+}
+
+fn parse_discovery_host(raw: &str) -> Result<Option<String>> {
+    if raw.strip_prefix("unix:").is_some() || raw.contains('/') {
+        return Ok(None);
+    }
+
+    if raw.chars().all(|ch| ch.is_ascii_digit()) {
+        return Ok(None);
+    }
+
+    if raw
+        .strip_prefix(':')
+        .is_some_and(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        return Ok(None);
+    }
+
+    if tcp_port(raw).is_some() {
+        return Ok(None);
+    }
+
+    if let Some(inner) = raw
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+    {
+        if inner.is_empty() {
+            bail!("autodiscovery host must not be empty");
+        }
+        return Ok(Some(inner.to_string()));
+    }
+
+    if raw.parse::<IpAddr>().is_ok() || !raw.contains(':') {
+        return Ok(Some(raw.to_string()));
+    }
+
+    bail!("autodiscovery host must not include a port: {raw}");
+}
+
 fn dedupe_targets(input: Vec<Target>) -> Vec<Target> {
     let mut by_key: HashMap<(String, TargetProtocol), Target> = HashMap::new();
     for target in input {
@@ -278,43 +360,39 @@ fn dedupe_targets(input: Vec<Target>) -> Vec<Target> {
     out
 }
 
-fn build_discovery_targets(
-    explicit_targets: &[Target],
-    config_target_count: usize,
-    config_still_autodiscover: bool,
-    discovery_hosts: &[String],
+#[derive(Debug, Clone)]
+enum DiscoveryDefaultMode {
+    Disabled,
+    Localhost,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveryPlan<'a> {
+    default_mode: DiscoveryDefaultMode,
+    positional_discovery_hosts: &'a [String],
+    autodiscover_hosts: &'a [String],
     username: Option<String>,
     password: Option<String>,
-) -> Vec<DiscoveryTarget> {
-    let mut out = discovery_hosts
+}
+
+fn build_discovery_targets(plan: &DiscoveryPlan<'_>) -> Vec<DiscoveryTarget> {
+    let mut out = plan
+        .positional_discovery_hosts
         .iter()
+        .chain(plan.autodiscover_hosts.iter())
         .map(|host| DiscoveryTarget {
             host: host.trim().to_string(),
-            username: username.clone(),
-            password: password.clone(),
+            username: plan.username.clone(),
+            password: plan.password.clone(),
         })
         .filter(|target| !target.host.is_empty())
         .collect::<Vec<_>>();
 
-    out.extend(
-        explicit_targets
-            .iter()
-            .filter(|target| target.protocol == TargetProtocol::Tcp)
-            .filter_map(|target| {
-                crate::target_addr::tcp_host(&target.addr).map(|host| DiscoveryTarget {
-                    host,
-                    username: None,
-                    password: None,
-                })
-            }),
-    );
-
-    let cli_has_explicit_targets = explicit_targets.len() > config_target_count;
-    let only_config_targets = !explicit_targets.is_empty() && !cli_has_explicit_targets;
-    let allow_default_autodiscovery = config_still_autodiscover || !only_config_targets;
-
-    if out.is_empty() && !cli_has_explicit_targets && allow_default_autodiscovery {
-        out.push(DiscoveryTarget::localhost(username, password));
+    if out.is_empty() && matches!(plan.default_mode, DiscoveryDefaultMode::Localhost) {
+        out.push(DiscoveryTarget::localhost(
+            plan.username.clone(),
+            plan.password.clone(),
+        ));
     }
 
     out
@@ -354,9 +432,10 @@ fn dedupe_discovery_targets(input: Vec<DiscoveryTarget>) -> Vec<DiscoveryTarget>
 mod tests {
     use clap::Parser;
 
-    use super::{DiscoveryTarget, VERSION, build_discovery_targets, dedupe_discovery_targets};
-    use crate::model::{Target, TargetProtocol};
-
+    use super::{
+        DiscoveryDefaultMode, DiscoveryPlan, DiscoveryTarget, VERSION, build_discovery_targets,
+        dedupe_discovery_targets,
+    };
     #[test]
     fn version_string_contains_build_metadata() {
         assert!(VERSION.starts_with(env!("CARGO_PKG_VERSION")));
@@ -367,16 +446,13 @@ mod tests {
 
     #[test]
     fn discovery_defaults_to_localhost_when_only_config_targets_are_present() {
-        let targets = vec![Target {
-            alias: Some("saved".to_string()),
-            addr: "127.0.0.1:6380".to_string(),
-            protocol: TargetProtocol::Tcp,
-            username: Some("default".to_string()),
-            password: Some("secret".to_string()),
-            tags: Vec::new(),
-        }];
-
-        let discovered = build_discovery_targets(&targets, targets.len(), true, &[], None, None);
+        let discovered = build_discovery_targets(&DiscoveryPlan {
+            default_mode: DiscoveryDefaultMode::Localhost,
+            positional_discovery_hosts: &[],
+            autodiscover_hosts: &[],
+            username: None,
+            password: None,
+        });
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0], DiscoveryTarget::localhost(None, None));
@@ -384,86 +460,117 @@ mod tests {
 
     #[test]
     fn discovery_can_be_disabled_when_only_config_targets_are_present() {
-        let targets = vec![Target {
-            alias: Some("saved".to_string()),
-            addr: "127.0.0.1:6380".to_string(),
-            protocol: TargetProtocol::Tcp,
-            username: Some("default".to_string()),
-            password: Some("secret".to_string()),
-            tags: Vec::new(),
-        }];
+        let discovered = dedupe_discovery_targets(build_discovery_targets(&DiscoveryPlan {
+            default_mode: DiscoveryDefaultMode::Disabled,
+            positional_discovery_hosts: &[],
+            autodiscover_hosts: &[],
+            username: None,
+            password: None,
+        }));
 
-        let discovered = dedupe_discovery_targets(build_discovery_targets(
-            &targets,
-            targets.len(),
-            false,
-            &[],
-            None,
-            None,
-        ));
-
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0], DiscoveryTarget::localhost(None, None));
+        assert!(discovered.is_empty());
     }
 
     #[test]
     fn explicit_cli_targets_still_disable_default_discovery() {
-        let config_target = Target {
-            alias: Some("saved".to_string()),
-            addr: "127.0.0.1:6380".to_string(),
-            protocol: TargetProtocol::Tcp,
-            username: Some("default".to_string()),
-            password: Some("secret".to_string()),
-            tags: Vec::new(),
-        };
-        let cli_target = Target {
-            alias: None,
-            addr: "127.0.0.1:6379".to_string(),
-            protocol: TargetProtocol::Tcp,
+        let discovered = dedupe_discovery_targets(build_discovery_targets(&DiscoveryPlan {
+            default_mode: DiscoveryDefaultMode::Disabled,
+            positional_discovery_hosts: &[],
+            autodiscover_hosts: &[],
             username: None,
             password: None,
-            tags: Vec::new(),
-        };
+        }));
 
-        let discovered = dedupe_discovery_targets(build_discovery_targets(
-            &[config_target, cli_target],
-            1,
-            true,
-            &[],
-            None,
-            None,
-        ));
-
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0].host, "127.0.0.1");
+        assert!(discovered.is_empty());
     }
 
     #[test]
     fn config_target_credentials_do_not_leak_to_hostwide_discovery() {
-        let config_target = Target {
-            alias: Some("saved".to_string()),
-            addr: "127.0.0.1:6380".to_string(),
-            protocol: TargetProtocol::Tcp,
-            username: Some("default".to_string()),
-            password: Some("secret".to_string()),
-            tags: Vec::new(),
-        };
-
-        let discovered = dedupe_discovery_targets(build_discovery_targets(
-            &[config_target],
-            1,
-            true,
-            &[],
-            None,
-            None,
-        ));
+        let discovered = dedupe_discovery_targets(build_discovery_targets(&DiscoveryPlan {
+            default_mode: DiscoveryDefaultMode::Localhost,
+            positional_discovery_hosts: &[],
+            autodiscover_hosts: &[],
+            username: None,
+            password: None,
+        }));
 
         assert_eq!(discovered, vec![DiscoveryTarget::localhost(None, None)]);
     }
 
     #[test]
+    fn positional_host_only_input_becomes_discovery_host() {
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "192.168.0.174"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert!(launch.targets.is_empty());
+        assert_eq!(
+            launch.discovery_targets,
+            vec![DiscoveryTarget {
+                host: "192.168.0.174".to_string(),
+                username: None,
+                password: None,
+            }]
+        );
+        assert!(launch.discovery_seed_targets.is_empty());
+    }
+
+    #[test]
+    fn explicit_targets_disable_autodiscovery_by_default() {
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "6379", "redis:9999"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.targets.len(), 2);
+        assert!(launch.discovery_targets.is_empty());
+        assert!(launch.discovery_seed_targets.is_empty());
+    }
+
+    #[test]
+    fn autodiscover_without_value_reenables_localhost_discovery() {
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "6379", "--autodiscover"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.targets.len(), 1);
+        assert_eq!(
+            launch.discovery_targets,
+            vec![DiscoveryTarget::localhost(None, None)]
+        );
+    }
+
+    #[test]
+    fn autodiscover_with_value_uses_requested_host() {
+        let cli = super::Cli::parse_from([
+            "reditop",
+            "--no-config",
+            "6379",
+            "--autodiscover",
+            "192.168.1.1",
+        ]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.targets.len(), 1);
+        assert_eq!(
+            launch.discovery_targets,
+            vec![DiscoveryTarget {
+                host: "192.168.1.1".to_string(),
+                username: None,
+                password: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn cluster_seeds_still_feed_discovery() {
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "--cluster", "7000"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.targets.len(), 1);
+        assert_eq!(launch.discovery_seed_targets.len(), 1);
+        assert_eq!(launch.discovery_seed_targets[0].addr, "127.0.0.1:7000");
+    }
+
+    #[test]
     fn once_flag_enables_non_interactive_launch() {
-        let cli = super::Cli::parse_from(["reditop", "--once"]);
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "--once"]);
         let launch = super::build_launch_config_from(cli).expect("launch config should parse");
 
         assert!(launch.once);

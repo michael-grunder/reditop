@@ -85,8 +85,12 @@ async fn run_once(launch: LaunchConfig) -> Result<()> {
         app.apply_update(state);
     }
 
-    let mut discovery_rx =
-        discovery::start(launch.discovery_targets, launch.targets, launch.settings);
+    let mut discovery_rx = discovery::start(
+        launch.discovery_targets,
+        launch.discovery_seed_targets,
+        launch.targets,
+        launch.settings,
+    );
     while let Some(event) = discovery_rx.recv().await {
         app.apply_discovery_event(&event);
         if let DiscoveryEvent::VerificationSucceeded(verified) = &event {
@@ -116,8 +120,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
     let mut app = AppState::new(launch.settings.clone(), registry);
     let (mut updates_rx, request_tx) =
         poller::start(launch.targets.clone(), launch.settings.clone());
-    let mut discovery_rx =
-        discovery::start(launch.discovery_targets, launch.targets, launch.settings);
+    let mut discovery_rx = discovery::start(
+        launch.discovery_targets,
+        launch.discovery_seed_targets,
+        launch.targets,
+        launch.settings,
+    );
 
     loop {
         while let Ok(update) = updates_rx.try_recv() {

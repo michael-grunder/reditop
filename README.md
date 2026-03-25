@@ -62,13 +62,15 @@ Examples:
 reditop 127.0.0.1:6379 127.0.0.1:6380
 reditop 6379 6380
 reditop
-reditop --host 192.168.0.148
-reditop --host 192.168.0.148 --host 192.168.0.149
+reditop 192.168.0.148
+reditop --autodiscover 192.168.0.148 --autodiscover 192.168.0.149
+reditop 6379 --autodiscover
+reditop 6379 --autodiscover 192.168.0.148
 reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
 reditop --cluster 7000
 reditop --cluster 10.0.0.11:7000 --cluster 10.0.0.12:7000
 reditop --once
-reditop --host 10.0.0.12 --once
+reditop --autodiscover 10.0.0.12 --once
 reditop --config ~/.config/redis-top.toml
 reditop -c config.toml 127.0.0.1:6379
 ```
@@ -76,10 +78,16 @@ reditop -c config.toml 127.0.0.1:6379
 For TCP targets, you can pass just a port (for example `6379`), and it is treated as
 `127.0.0.1:6379`.
 
-If you do not provide explicit targets, `reditop` now autodiscovers on
-`127.0.0.1` by default. `--host <HOST>` switches autodiscovery to one or more
-remote hosts and probes only a curated Redis-focused port set instead of doing
-a full port scan.
+Host-only positional values such as `192.168.0.148` are treated as autodiscovery
+hosts, not fixed monitored instances. Exact TCP targets such as `6379` or
+`192.168.0.148:6380` disable autodiscovery by default and only connect to the
+requested server(s).
+
+If you do not provide explicit targets, `reditop` autodiscovers on `127.0.0.1`
+by default. `--autodiscover[=<HOST>]` opt back into autodiscovery when you also
+provide exact targets. With no value it autodiscovers on localhost; with a
+value it probes the provided host. `--host <HOST>` remains available as an
+alias for compatibility.
 
 Explicit `--cluster <HOST:PORT>` values are treated as seed nodes: the TUI
 starts immediately, the seed is monitored right away, and the background
@@ -95,7 +103,7 @@ Important options:
 - `--connect-timeout <DURATION>`
 - `--command-timeout <DURATION>`
 - `-n, --concurrency <N>`
-- `--host <HOST>`
+- `--autodiscover [HOST]`
 - `--cluster <HOST:PORT>`
 - `--view <flat|tree>`
 - `--sort <alias|address|type|cluster|memory|mem|ops|lat|latmax|status>`
