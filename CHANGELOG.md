@@ -25,6 +25,9 @@
 
 ### Fixed
 
+- Record timed-out poll attempts as observed latency samples so `LatMax` and
+  `LatLast` reflect command and connection timeouts instead of keeping the last
+  successful latency.
 - Make `LatMax` overview emphasis flash only on frames where a new overall
   maximum is first observed, instead of keeping the current record holder
   highlighted indefinitely.

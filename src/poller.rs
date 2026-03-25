@@ -179,6 +179,7 @@ async fn poll_one(
         .set_connection_timeout(Some(settings.connect_timeout))
         .set_response_timeout(Some(settings.command_timeout));
 
+    let connect_start = Instant::now();
     let mut conn = match client
         .get_multiplexed_async_connection_with_config(&config)
         .await
@@ -186,7 +187,7 @@ async fn poll_one(
         Ok(conn) => conn,
         Err(err) => {
             let (status, message) = classify_error(&err);
-            apply_failure(&mut state, status, message);
+            apply_timed_failure(&mut state, status, message, connect_start);
             return state;
         }
     };
@@ -194,16 +195,17 @@ async fn poll_one(
     let ping_start = Instant::now();
     if let Err(err) = redis::cmd("PING").query_async::<String>(&mut conn).await {
         let (status, message) = classify_error(&err);
-        apply_failure(&mut state, status, message);
+        apply_timed_failure(&mut state, status, message, ping_start);
         return state;
     }
     let latency_ms = ping_start.elapsed().as_secs_f64() * 1000.0;
 
+    let info_start = Instant::now();
     let info: String = match redis::cmd("INFO").query_async(&mut conn).await {
         Ok(info) => info,
         Err(err) => {
             let (status, message) = classify_error(&err);
-            apply_failure(&mut state, status, message);
+            apply_timed_failure(&mut state, status, message, info_start);
             return state;
         }
     };
@@ -225,8 +227,7 @@ async fn poll_one(
         apply_cluster_shards_to_state(&mut state, target, &shards);
     }
 
-    state.push_latency_sample(latency_ms);
-    state.last_latency_ms = Some(latency_ms);
+    record_latency_sample(&mut state, latency_ms);
     state.status = Status::Ok;
     state.last_error = None;
     state.error_details = None;
@@ -350,6 +351,23 @@ fn apply_failure(state: &mut InstanceState, status: Status, details: ErrorDetail
     state.status = status;
     state.last_error = Some(details.summary.clone());
     state.error_details = Some(details);
+}
+
+fn record_latency_sample(state: &mut InstanceState, latency_ms: f64) {
+    state.push_latency_sample(latency_ms);
+    state.last_latency_ms = Some(latency_ms);
+}
+
+fn apply_timed_failure(
+    state: &mut InstanceState,
+    status: Status,
+    details: ErrorDetails,
+    start: Instant,
+) {
+    if status == Status::Timeout {
+        record_latency_sample(state, start.elapsed().as_secs_f64() * 1000.0);
+    }
+    apply_failure(state, status, details);
 }
 
 fn apply_bigkeys_failure(state: &mut InstanceState, message: String) {
@@ -711,11 +729,14 @@ fn addresses_match(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use redis::{ErrorKind, Value};
 
     use super::{
-        BIGKEYS_TOP_N, BigkeyEntry, bigkeys_requires_readonly, classify_error_status,
-        cluster_signature, insert_bigkey_entry, key_type_size_command,
+        BIGKEYS_TOP_N, BigkeyEntry, apply_timed_failure, bigkeys_requires_readonly,
+        classify_error_status, cluster_signature, error_details, insert_bigkey_entry,
+        key_type_size_command,
     };
     use crate::model::{DetailMetrics, InstanceState, Status};
     use crate::parse::{ClusterShard, ClusterShardNode, ClusterShardRole, parse_cluster_shards};
@@ -867,5 +888,45 @@ mod tests {
             ),
             Status::Auth
         );
+    }
+
+    #[test]
+    fn timed_out_failures_record_elapsed_latency() {
+        let mut state = InstanceState::new("node".into(), "127.0.0.1:6379".into());
+        state.max_latency_ms = 10.0;
+
+        let start = Instant::now()
+            .checked_sub(Duration::from_millis(125))
+            .expect("start instant");
+        apply_timed_failure(
+            &mut state,
+            Status::Timeout,
+            error_details("timed out".into()),
+            start,
+        );
+
+        assert_eq!(state.status, Status::Timeout);
+        assert!(state.last_latency_ms.is_some());
+        assert!(state.last_latency_ms.expect("timeout latency") >= 100.0);
+        assert!(state.max_latency_ms >= 100.0);
+    }
+
+    #[test]
+    fn non_timeout_failures_do_not_record_latency() {
+        let mut state = InstanceState::new("node".into(), "127.0.0.1:6379".into());
+        let start = Instant::now()
+            .checked_sub(Duration::from_millis(125))
+            .expect("start instant");
+
+        apply_timed_failure(
+            &mut state,
+            Status::Down,
+            error_details("connection refused".into()),
+            start,
+        );
+
+        assert_eq!(state.status, Status::Down);
+        assert_eq!(state.last_latency_ms, None);
+        assert!(state.max_latency_ms.abs() < f64::EPSILON);
     }
 }
