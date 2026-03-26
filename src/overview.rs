@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -173,7 +173,7 @@ impl AppState {
             .collect();
 
         OverviewFrame {
-            timestamp: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            timestamp: format_microtime(SystemTime::now()),
             header: OverviewHeader {
                 refresh_interval_ms: self.settings.refresh_interval.as_millis(),
                 view_mode: match self.view_mode {
@@ -193,6 +193,13 @@ impl AppState {
             rows,
         }
     }
+}
+
+fn format_microtime(timestamp: SystemTime) -> String {
+    timestamp.duration_since(UNIX_EPOCH).map_or_else(
+        |_| "0.000000".to_string(),
+        |duration| format!("{}.{:06}", duration.as_secs(), duration.subsec_micros()),
+    )
 }
 
 pub fn render_plain_text(frame: &OverviewFrame) -> String {
@@ -509,13 +516,20 @@ mod tests {
         let json = serde_json::to_value(app.build_overview_frame()).expect("frame serializes");
 
         assert!(
-            humantime::parse_rfc3339(
-                json["timestamp"]
-                    .as_str()
-                    .expect("timestamp serialized as a string")
-            )
-            .is_ok()
+            json["timestamp"]
+                .as_str()
+                .expect("timestamp serialized as a string")
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == '.')
         );
+        let parts = json["timestamp"]
+            .as_str()
+            .expect("timestamp serialized as a string")
+            .split('.')
+            .collect::<Vec<_>>();
+        assert_eq!(parts.len(), 2);
+        assert!(!parts[0].is_empty());
+        assert_eq!(parts[1].len(), 6);
         assert_eq!(json["header"]["view_mode"], "flat");
         assert_eq!(json["header"]["filter"], "alp");
         assert_eq!(json["header"]["is_filtering"], true);

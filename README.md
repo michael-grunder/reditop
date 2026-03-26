@@ -126,8 +126,9 @@ prints the overview table to stdout, and exits.
 
 `--output json` switches the main overview page to newline-delimited JSON
 frames instead of drawing the interactive TUI. Each frame includes a top-level
-RFC 3339 timestamp and is generated from the same centralized overview data
-model used by the TUI overview, which makes the JSON stream suitable for
+microtime-style timestamp string (`seconds.microseconds`) and is generated from
+the same centralized overview data model used by the TUI overview, which makes
+the JSON stream suitable for
 integration testing. When combined with `--once`, `reditop` emits a single
 JSON frame and exits.
 
