@@ -8,7 +8,7 @@ use clap::{ArgAction, Parser, ValueEnum};
 use crate::config;
 use crate::discovery::DiscoveryTarget;
 use crate::model::{RuntimeSettings, SortMode, Target, TargetProtocol, ViewMode};
-use crate::target_addr::{normalize_tcp_addr, tcp_port};
+use crate::target_addr::{normalize_tcp_addr, tcp_endpoint_identity, tcp_port};
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -126,8 +126,7 @@ pub fn build_launch_config() -> Result<LaunchConfig> {
 fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
     let base_settings = config::default_settings();
     let loaded_config = config::load_config(args.config.as_deref(), args.no_config)?;
-    let mut merged_targets = loaded_config.targets.clone();
-    let config_target_count = merged_targets.len();
+    let config_target_count = loaded_config.targets.len();
 
     let mut settings = config::apply_overrides(base_settings, &loaded_config.overrides);
 
@@ -211,16 +210,24 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    for item in &mut merged_targets {
-        if item.username.is_none() {
-            item.username.clone_from(&args.user);
-        }
-        if item.password.is_none() {
-            item.password.clone_from(&args.auth);
+    let cli_has_explicit_targets = !cli_targets.is_empty() || !parsed_cluster_seeds.is_empty();
+    let mut merged_targets = if cli_has_explicit_targets {
+        Vec::new()
+    } else {
+        loaded_config.targets.clone()
+    };
+
+    if !cli_has_explicit_targets {
+        for item in &mut merged_targets {
+            if item.username.is_none() {
+                item.username.clone_from(&args.user);
+            }
+            if item.password.is_none() {
+                item.password.clone_from(&args.auth);
+            }
         }
     }
 
-    let cli_has_explicit_targets = !cli_targets.is_empty() || !parsed_cluster_seeds.is_empty();
     let discovery_seed_targets = dedupe_targets(parsed_cluster_seeds.clone());
 
     for mut parsed in cli_targets {
@@ -229,6 +236,9 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
         }
         if parsed.password.is_none() {
             parsed.password.clone_from(&args.auth);
+        }
+        if let Some(config_target) = find_matching_target(&loaded_config.targets, &parsed) {
+            merge_target_context(&mut parsed, config_target);
         }
         merged_targets.push(parsed);
     }
@@ -239,6 +249,9 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
         }
         if seed.password.is_none() {
             seed.password.clone_from(&args.auth);
+        }
+        if let Some(config_target) = find_matching_target(&loaded_config.targets, seed) {
+            merge_target_context(seed, config_target);
         }
     }
 
@@ -353,11 +366,48 @@ fn parse_discovery_host(raw: &str) -> Result<Option<String>> {
 fn dedupe_targets(input: Vec<Target>) -> Vec<Target> {
     let mut by_key: HashMap<(String, TargetProtocol), Target> = HashMap::new();
     for target in input {
-        by_key.insert((target.addr.clone(), target.protocol), target);
+        by_key
+            .entry((target.addr.clone(), target.protocol))
+            .and_modify(|existing| merge_target_context(existing, &target))
+            .or_insert(target);
     }
     let mut out: Vec<Target> = by_key.into_values().collect();
     out.sort_by(|a, b| a.addr.cmp(&b.addr));
     out
+}
+
+fn find_matching_target<'a>(targets: &'a [Target], candidate: &Target) -> Option<&'a Target> {
+    targets
+        .iter()
+        .find(|target| same_target_endpoint(target, candidate))
+}
+
+fn same_target_endpoint(left: &Target, right: &Target) -> bool {
+    if left.protocol != right.protocol {
+        return false;
+    }
+
+    match left.protocol {
+        TargetProtocol::Unix => left.addr == right.addr,
+        TargetProtocol::Tcp => {
+            tcp_endpoint_identity(&left.addr) == tcp_endpoint_identity(&right.addr)
+        }
+    }
+}
+
+fn merge_target_context(target: &mut Target, known: &Target) {
+    if target.alias.is_none() {
+        target.alias.clone_from(&known.alias);
+    }
+    if target.username.is_none() {
+        target.username.clone_from(&known.username);
+    }
+    if target.password.is_none() {
+        target.password.clone_from(&known.password);
+    }
+    if target.tags.is_empty() && !known.tags.is_empty() {
+        target.tags.clone_from(&known.tags);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -430,7 +480,10 @@ fn dedupe_discovery_targets(input: Vec<DiscoveryTarget>) -> Vec<DiscoveryTarget>
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use clap::Parser;
+    use tempfile::tempdir;
 
     use super::{
         DiscoveryDefaultMode, DiscoveryPlan, DiscoveryTarget, VERSION, build_discovery_targets,
@@ -574,5 +627,71 @@ mod tests {
         let launch = super::build_launch_config_from(cli).expect("launch config should parse");
 
         assert!(launch.once);
+    }
+
+    #[test]
+    fn explicit_cli_targets_do_not_load_unmatched_config_targets() {
+        let dir = tempdir().expect("tempdir should work");
+        let config_path = dir.path().join("redis-top.toml");
+        fs::write(
+            &config_path,
+            r#"
+[[targets]]
+alias = "local-6379"
+addr = "127.0.0.1:6379"
+
+[[targets]]
+alias = "local-6380"
+addr = "127.0.0.1:6380"
+password = "secret"
+"#,
+        )
+        .expect("config should write");
+
+        let cli = super::Cli::parse_from([
+            "reditop",
+            "--config",
+            config_path.to_str().expect("config path should be utf8"),
+            "6379",
+        ]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.targets.len(), 1);
+        assert_eq!(launch.targets[0].addr, "127.0.0.1:6379");
+        assert_eq!(launch.targets[0].alias.as_deref(), Some("local-6379"));
+        assert!(launch.discovery_targets.is_empty());
+    }
+
+    #[test]
+    fn explicit_cli_targets_reuse_matching_config_credentials() {
+        let dir = tempdir().expect("tempdir should work");
+        let config_path = dir.path().join("redis-top.toml");
+        fs::write(
+            &config_path,
+            r#"
+[[targets]]
+alias = "loopback"
+addr = "localhost:6380"
+user = "default"
+password = "secret"
+tags = ["known"]
+"#,
+        )
+        .expect("config should write");
+
+        let cli = super::Cli::parse_from([
+            "reditop",
+            "--config",
+            config_path.to_str().expect("config path should be utf8"),
+            "6380",
+        ]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.targets.len(), 1);
+        assert_eq!(launch.targets[0].addr, "127.0.0.1:6380");
+        assert_eq!(launch.targets[0].alias.as_deref(), Some("loopback"));
+        assert_eq!(launch.targets[0].username.as_deref(), Some("default"));
+        assert_eq!(launch.targets[0].password.as_deref(), Some("secret"));
+        assert_eq!(launch.targets[0].tags, vec!["known".to_string()]);
     }
 }

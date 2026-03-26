@@ -33,6 +33,9 @@
 
 ### Fixed
 
+- Stop loading unrelated config-defined targets when exact CLI targets are
+  provided, while still reusing matching configured target context such as
+  alias, username, password, and tags.
 - Stop adding host-only positional autodiscovery inputs such as
   `192.168.0.174` to the TUI as a synthetic `DOWN` instance.
 - Record timed-out poll attempts as observed latency samples so `LatMax` and

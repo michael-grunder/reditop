@@ -34,6 +34,19 @@ pub fn tcp_port(addr: &str) -> Option<u16> {
     strip_host(addr)?.parse::<u16>().ok()
 }
 
+pub fn tcp_endpoint_identity(addr: &str) -> Option<String> {
+    let host = tcp_host(addr)?;
+    let port = tcp_port(addr)?;
+    let normalized_host = if host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    {
+        "127.0.0.1".to_string()
+    } else {
+        canonical_host(addr).unwrap_or_else(|| host.to_ascii_lowercase())
+    };
+    Some(format!("{normalized_host}:{port}"))
+}
+
 pub fn strip_host(addr: &str) -> Option<String> {
     if addr.contains('/') {
         return None;
@@ -111,7 +124,7 @@ fn extract_host(addr: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_host, normalize_tcp_addr, strip_host, tcp_port};
+    use super::{canonical_host, normalize_tcp_addr, strip_host, tcp_endpoint_identity, tcp_port};
 
     #[test]
     fn normalizes_port_only_targets() {
@@ -154,5 +167,22 @@ mod tests {
         assert_eq!(tcp_port("localhost:6379"), Some(6379));
         assert_eq!(tcp_port("[::1]:6380"), Some(6380));
         assert_eq!(tcp_port("/tmp/redis.sock"), None);
+    }
+
+    #[test]
+    fn tcp_endpoint_identity_normalizes_localhost_aliases() {
+        assert_eq!(
+            tcp_endpoint_identity("localhost:6379"),
+            Some("127.0.0.1:6379".to_string())
+        );
+        assert_eq!(
+            tcp_endpoint_identity("[::1]:6379"),
+            Some("127.0.0.1:6379".to_string())
+        );
+        assert_eq!(
+            tcp_endpoint_identity("redis.example:6379"),
+            Some("redis.example:6379".to_string())
+        );
+        assert_eq!(tcp_endpoint_identity("/tmp/redis.sock"), None);
     }
 }

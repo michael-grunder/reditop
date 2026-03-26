@@ -83,6 +83,11 @@ hosts, not fixed monitored instances. Exact TCP targets such as `6379` or
 `192.168.0.148:6380` disable autodiscovery by default and only connect to the
 requested server(s).
 
+When you provide explicit targets, `reditop` does not also add unrelated
+`[[targets]]` entries from `redis-top.toml`. If an explicit target matches a
+configured TCP or Unix target, `reditop` still reuses that target's context
+such as alias, username, password, and tags.
+
 If you do not provide explicit targets, `reditop` autodiscovers on `127.0.0.1`
 by default. `--autodiscover[=<HOST>]` opt back into autodiscovery when you also
 provide exact targets. With no value it autodiscovers on localhost; with a
