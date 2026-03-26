@@ -1594,21 +1594,29 @@ fn hotkeys_table<'a>(
 }
 
 fn detail_tab_label(tab: &DetailTabSpec) -> Line<'static> {
-    let shortcut = tab.shortcut.to_ascii_uppercase().to_string();
-    let title = tab.title.to_string();
-    let first = title
-        .chars()
-        .next()
-        .map(|ch| ch.to_ascii_uppercase().to_string())
-        .unwrap_or_default();
-    let remainder = title.chars().skip(1).collect::<String>();
-    let suffix = if first == shortcut { remainder } else { title };
+    let shortcut = tab.shortcut.to_ascii_uppercase();
+    let title = tab.title;
 
-    Line::from(vec![
-        Span::raw("["),
-        Span::styled(shortcut, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format!("]{suffix}")),
-    ])
+    if let Some((start, ch)) = title
+        .char_indices()
+        .find(|(_, ch)| ch.to_ascii_uppercase() == shortcut)
+    {
+        let end = start + ch.len_utf8();
+        let prefix = &title[..start];
+        let suffix = &title[end..];
+
+        return Line::from(vec![
+            Span::raw(prefix.to_string()),
+            Span::raw("["),
+            Span::styled(
+                ch.to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!("]{suffix}")),
+        ]);
+    }
+
+    Line::from(vec![Span::raw(title.to_string())])
 }
 
 fn format_aligned_rows(rows: &[(&str, String)]) -> String {
@@ -2686,7 +2694,8 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("[L]atency")));
         assert!(lines.iter().any(|line| line.contains("[I]nfo Raw")));
         assert!(lines.iter().any(|line| line.contains("[C]ommandstats")));
-        assert!(lines.iter().any(|line| line.contains("[K]Hotkeys")));
+        assert!(lines.iter().any(|line| line.contains("[B]igkeys")));
+        assert!(lines.iter().any(|line| line.contains("Hot[k]eys")));
 
         let line_index = lines
             .iter()
