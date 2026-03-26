@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use serde::Serialize;
 
 use crate::app::{AppState, DisplayRow};
@@ -6,6 +8,7 @@ use crate::model::{SortDirection, UiColor};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OverviewFrame {
+    pub timestamp: String,
     pub header: OverviewHeader,
     pub columns: Vec<OverviewColumn>,
     pub rows: Vec<OverviewRow>,
@@ -170,6 +173,7 @@ impl AppState {
             .collect();
 
         OverviewFrame {
+            timestamp: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
             header: OverviewHeader {
                 refresh_interval_ms: self.settings.refresh_interval.as_millis(),
                 view_mode: match self.view_mode {
@@ -504,6 +508,14 @@ mod tests {
 
         let json = serde_json::to_value(app.build_overview_frame()).expect("frame serializes");
 
+        assert!(
+            humantime::parse_rfc3339(
+                json["timestamp"]
+                    .as_str()
+                    .expect("timestamp serialized as a string")
+            )
+            .is_ok()
+        );
         assert_eq!(json["header"]["view_mode"], "flat");
         assert_eq!(json["header"]["filter"], "alp");
         assert_eq!(json["header"]["is_filtering"], true);
