@@ -2,9 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui::style::Color;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ViewMode {
     Flat,
     Tree,
@@ -32,7 +32,7 @@ pub enum SortMode {
     Status,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum SortDirection {
     #[serde(rename = "asc")]
     Asc,

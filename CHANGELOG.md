@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add a shared overview-frame data model that now feeds the main TUI overview
+  and can also be emitted as newline-delimited JSON with `--output json`,
+  including a single-frame `--once --output json` mode for integration tests.
 - Add richer Redis instance statuses such as `PROTECTED` and `AUTH`, and show
   full server-reported error details in the detail summary view.
 - Add `[global].still_autodiscover`, defaulting to `true`, so config-defined

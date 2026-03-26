@@ -19,9 +19,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
 
 use crate::app::{ActiveView, AppState, FilterPromptMode, OverviewModal};
-use crate::cli::LaunchConfig;
-use crate::column::{Align, EmphasisStyle};
+use crate::cli::{LaunchConfig, OutputMode};
+use crate::column::EmphasisStyle;
 use crate::discovery::{self, DiscoveryEvent};
+use crate::overview::{
+    ClusterGutterColor, fit_cell_text, render_plain_text, sort_direction_symbol, sortable_header,
+};
 use crate::poller::{self, PollerRequest};
 use crate::registry::ColumnRegistry;
 
@@ -66,6 +69,9 @@ pub async fn run(launch: LaunchConfig) -> Result<()> {
     if launch.once {
         return run_once(launch).await;
     }
+    if launch.output_mode == OutputMode::Json {
+        return run_json_stream(launch).await;
+    }
     let mut terminal = setup_terminal()?;
     let result = run_loop(&mut terminal, launch);
     restore_terminal(&mut terminal)?;
@@ -101,13 +107,51 @@ async fn run_once(launch: LaunchConfig) -> Result<()> {
         }
     }
 
-    let output = render_overview_table(&app);
     let mut stdout = io::stdout().lock();
-    stdout.write_all(output.as_bytes())?;
-    if !output.ends_with('\n') {
-        stdout.write_all(b"\n")?;
+    let frame = app.build_overview_frame();
+    match launch.output_mode {
+        OutputMode::Tui => {
+            let output = render_plain_text(&frame);
+            stdout.write_all(output.as_bytes())?;
+            if !output.ends_with('\n') {
+                stdout.write_all(b"\n")?;
+            }
+        }
+        OutputMode::Json => {
+            serde_json::to_writer(&mut stdout, &frame)?;
+            stdout.write_all(b"\n")?;
+        }
     }
     Ok(())
+}
+
+async fn run_json_stream(launch: LaunchConfig) -> Result<()> {
+    let registry = ColumnRegistry::load(
+        launch.config_path.as_deref(),
+        launch.no_default_config,
+        launch.settings.default_sort,
+    );
+    let mut app = AppState::new(launch.settings.clone(), registry);
+    let (mut updates_rx, request_tx) =
+        poller::start(launch.targets.clone(), launch.settings.clone());
+    let mut discovery_rx = discovery::start(
+        launch.discovery_targets,
+        launch.discovery_seed_targets,
+        launch.targets,
+        launch.settings.clone(),
+    );
+    let mut frame_interval = tokio::time::interval(Duration::from_millis(100));
+
+    loop {
+        frame_interval.tick().await;
+        drain_updates(&mut app, &mut updates_rx, &mut discovery_rx, &request_tx);
+        let frame = app.build_overview_frame();
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        serde_json::to_writer(&mut stdout, &frame)?;
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -128,17 +172,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
     );
 
     loop {
-        while let Ok(update) = updates_rx.try_recv() {
-            app.apply_update(update);
-        }
-        while let Ok(event) = discovery_rx.try_recv() {
-            app.apply_discovery_event(&event);
-            if let DiscoveryEvent::VerificationSucceeded(verified) = event {
-                let target = verified.target.clone();
-                app.apply_verified_instance(*verified);
-                let _ = request_tx.try_send(PollerRequest::UpsertTarget(target));
-            }
-        }
+        drain_updates(&mut app, &mut updates_rx, &mut discovery_rx, &request_tx);
 
         maybe_request_bigkeys_scan(&mut app, &request_tx);
 
@@ -393,6 +427,25 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
     Ok(())
 }
 
+fn drain_updates(
+    app: &mut AppState,
+    updates_rx: &mut tokio::sync::mpsc::Receiver<crate::model::InstanceState>,
+    discovery_rx: &mut tokio::sync::mpsc::Receiver<DiscoveryEvent>,
+    request_tx: &tokio::sync::mpsc::Sender<PollerRequest>,
+) {
+    while let Ok(update) = updates_rx.try_recv() {
+        app.apply_update(update);
+    }
+    while let Ok(event) = discovery_rx.try_recv() {
+        app.apply_discovery_event(&event);
+        if let DiscoveryEvent::VerificationSucceeded(verified) = event {
+            let target = verified.target.clone();
+            app.apply_verified_instance(*verified);
+            let _ = request_tx.try_send(PollerRequest::UpsertTarget(target));
+        }
+    }
+}
+
 fn current_commandstats(app: &AppState) -> Option<&[crate::model::CommandStat]> {
     let key = app.selected_key()?;
     let instance = app.instances.get(&key)?;
@@ -616,77 +669,28 @@ fn overview_cell(fitted: String, emphasis_style: Option<EmphasisStyle>) -> Cell<
 }
 
 fn overview_cluster_gutter_cell(
-    app: &AppState,
-    row: &crate::app::DisplayRow,
-    cluster_labels: &std::collections::HashMap<String, String>,
+    cluster_gutter: Option<&crate::overview::OverviewClusterGutter>,
 ) -> Cell<'static> {
-    let Some(instance) = app.instances.get(&row.key) else {
-        return Cell::from(" ");
-    };
-
-    let Some(color) = cluster_gutter_color(app, instance, cluster_labels) else {
+    let Some(cluster_gutter) = cluster_gutter else {
         return Cell::from(" ");
     };
 
     Cell::from(Line::from(vec![Span::styled(
         "│",
-        Style::default().fg(color),
+        Style::default().fg(ratatui_color_from_cluster(cluster_gutter.color)),
     )]))
 }
 
-fn cluster_gutter_color(
-    app: &AppState,
-    instance: &crate::model::InstanceState,
-    cluster_labels: &std::collections::HashMap<String, String>,
-) -> Option<Color> {
-    let token = instance.cluster_id.as_deref().map_or_else(
-        || replication_group_token(app, instance),
-        |raw_cluster| cluster_labels.get(raw_cluster).cloned(),
-    )?;
-
-    Some(cluster_color_for_token(&token))
-}
-
-fn replication_group_token(
-    app: &AppState,
-    instance: &crate::model::InstanceState,
-) -> Option<String> {
-    match instance.kind {
-        crate::model::InstanceType::Primary => app
-            .instances
-            .values()
-            .any(|candidate| candidate.parent_addr.as_deref() == Some(instance.addr.as_str()))
-            .then(|| instance.addr.clone()),
-        crate::model::InstanceType::Replica => instance
-            .parent_addr
-            .as_deref()
-            .map(|parent| resolve_replication_group_addr(app, parent)),
-        crate::model::InstanceType::Standalone | crate::model::InstanceType::Cluster => None,
+const fn ratatui_color_from_cluster(color: ClusterGutterColor) -> Color {
+    match color {
+        ClusterGutterColor::Cyan => Color::Cyan,
+        ClusterGutterColor::Yellow => Color::Yellow,
+        ClusterGutterColor::Green => Color::Green,
+        ClusterGutterColor::Magenta => Color::Magenta,
+        ClusterGutterColor::Blue => Color::Blue,
+        ClusterGutterColor::Red => Color::Red,
+        ClusterGutterColor::Gray => Color::Gray,
     }
-}
-
-fn resolve_replication_group_addr(app: &AppState, parent: &str) -> String {
-    app.instances
-        .values()
-        .find(|candidate| candidate.key == parent || candidate.addr == parent)
-        .map_or_else(|| parent.to_string(), |candidate| candidate.addr.clone())
-}
-
-fn cluster_color_for_token(token: &str) -> Color {
-    const PALETTE: [Color; 7] = [
-        Color::Cyan,
-        Color::Yellow,
-        Color::Green,
-        Color::Magenta,
-        Color::Blue,
-        Color::Red,
-        Color::Gray,
-    ];
-
-    let index = token.bytes().fold(0usize, |acc, byte| {
-        acc.wrapping_mul(33).wrapping_add(usize::from(byte))
-    });
-    PALETTE[index % PALETTE.len()]
 }
 
 fn style_from_emphasis(emphasis_style: EmphasisStyle) -> Style {
@@ -715,6 +719,7 @@ fn style_from_emphasis(emphasis_style: EmphasisStyle) -> Style {
 #[allow(clippy::too_many_lines)]
 fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect) {
     const TABLE_COLUMN_SPACING: u16 = 1;
+    let overview = app.build_overview_frame();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -725,21 +730,23 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect)
         "redis-top  refresh={}  view={:?}  sort={} {}  host={}  filter={}{}",
         humantime::format_duration(app.settings.refresh_interval),
         app.view_mode,
-        app.sort_label(),
+        overview.header.sort.label,
         sort_direction_symbol(app.sort_direction),
-        if app.force_show_host {
-            "shown"
-        } else if app.should_omit_host_in_rendering() {
-            "omitted(auto)"
-        } else {
-            "shown(auto)"
+        match overview.header.host_rendering {
+            "shown" => "shown",
+            "omitted_auto" => "omitted(auto)",
+            _ => "shown(auto)",
         },
-        if app.filter.is_empty() {
+        if overview.header.filter.is_empty() {
             "<none>"
         } else {
-            &app.filter
+            &overview.header.filter
         },
-        if app.is_filtering { " (editing)" } else { "" }
+        if overview.header.is_filtering {
+            " (editing)"
+        } else {
+            ""
+        }
     ))
     .style(base_style(app))
     .block(
@@ -750,10 +757,11 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect)
     );
     frame.render_widget(header, chunks[0]);
 
-    let rows = app.visible_rows();
-    let column_keys = app.visible_column_keys();
-    let cluster_labels = app.cluster_labels();
-    let emphasized = app.take_emphasized_rows_by_column(&rows);
+    let column_keys = overview
+        .columns
+        .iter()
+        .map(|column| column.key.clone())
+        .collect::<Vec<_>>();
     let columns: Vec<_> = column_keys
         .iter()
         .filter_map(|key| app.column_registry.column(key.as_str()))
@@ -764,24 +772,21 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect)
         TABLE_COLUMN_SPACING,
     );
 
-    let table_rows: Vec<Row<'_>> = rows
+    let table_rows: Vec<Row<'_>> = overview
+        .rows
         .iter()
         .map(|row| {
-            let mut cells = Vec::with_capacity(column_keys.len() + 1);
-            cells.push(overview_cluster_gutter_cell(app, row, &cluster_labels));
-            cells.extend(column_keys.iter().enumerate().map(|(idx, key)| {
+            let mut cells = Vec::with_capacity(overview.columns.len() + 1);
+            cells.push(overview_cluster_gutter_cell(row.cluster_gutter.as_ref()));
+            cells.extend(row.cells.iter().enumerate().map(|(idx, cell)| {
                 let width = widths[idx];
                 let align = columns[idx].align();
-                let raw = app.render_cell(row, key).unwrap_or_default();
-                let fitted = fit_cell_text(&raw, width as usize, align);
-                let emphasis_style = emphasized
-                    .get(key)
-                    .filter(|winner| *winner == &row.key)
-                    .map(|_| {
-                        columns[idx]
-                            .emphasis_style()
-                            .unwrap_or_else(|| app.column_registry.overview_emphasis_style())
-                    });
+                let fitted = fit_cell_text(&cell.value, width as usize, align);
+                let emphasis_style = cell.emphasized.then(|| {
+                    columns[idx]
+                        .emphasis_style()
+                        .unwrap_or_else(|| app.column_registry.overview_emphasis_style())
+                });
                 overview_cell(fitted, emphasis_style)
             }));
 
@@ -804,7 +809,8 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect)
                 .zip(column_keys.iter())
                 .zip(widths.iter())
                 .map(|((column, key), width)| {
-                    let label = sortable_header(column.header(), app, key);
+                    let label =
+                        sortable_header(column.header(), &app.sort_by, app.sort_direction, key);
                     Cell::from(fit_cell_text(&label, *width as usize, column.align()))
                 }),
         ),
@@ -825,77 +831,6 @@ fn draw_overview(frame: &mut ratatui::Frame<'_>, app: &mut AppState, area: Rect)
 
     let mut state = ratatui::widgets::TableState::default().with_selected(Some(app.selected_index));
     frame.render_stateful_widget(table, chunks[1], &mut state);
-}
-
-fn render_overview_table(app: &AppState) -> String {
-    let rows = app.visible_rows();
-    if rows.is_empty() {
-        return "No Redis/Valkey instances found.".to_string();
-    }
-
-    let column_keys = app.visible_column_keys();
-    let columns: Vec<_> = column_keys
-        .iter()
-        .filter_map(|key| app.column_registry.column(key))
-        .collect();
-    if columns.is_empty() {
-        return "No overview columns are enabled.".to_string();
-    }
-
-    let rendered_rows: Vec<Vec<String>> = rows
-        .iter()
-        .map(|row| {
-            column_keys
-                .iter()
-                .map(|key| app.render_cell(row, key).unwrap_or_default())
-                .collect()
-        })
-        .collect();
-
-    let mut widths: Vec<usize> = columns
-        .iter()
-        .zip(column_keys.iter())
-        .map(|(column, key)| plain_text_width(&sortable_header(column.header(), app, key)))
-        .collect();
-
-    for row in &rendered_rows {
-        for (idx, cell) in row.iter().enumerate() {
-            widths[idx] = widths[idx].max(plain_text_width(cell));
-        }
-    }
-
-    let header = columns
-        .iter()
-        .zip(column_keys.iter())
-        .enumerate()
-        .map(|(idx, (column, key))| {
-            fit_cell_text(
-                &sortable_header(column.header(), app, key),
-                widths[idx],
-                column.align(),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let separator = widths
-        .iter()
-        .map(|width| "-".repeat(*width))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let body = rendered_rows
-        .iter()
-        .map(|row| {
-            row.iter()
-                .enumerate()
-                .map(|(idx, cell)| fit_cell_text(cell, widths[idx], columns[idx].align()))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!("{header}\n{separator}\n{body}")
 }
 
 fn compute_column_widths(
@@ -975,41 +910,6 @@ fn shrink_widths_to_fit(widths: &mut [u16], target: u16) {
         }
         widths[idx] -= 1;
     }
-}
-
-fn fit_cell_text(text: &str, width: usize, align: Align) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let mut chars = text.chars().collect::<Vec<char>>();
-    if chars.len() > width {
-        chars.truncate(width);
-    }
-    let truncated: String = chars.into_iter().collect();
-    let len = truncated.chars().count();
-    if len >= width {
-        return truncated;
-    }
-    let pad = width - len;
-    match align {
-        Align::Left => format!("{truncated}{:pad$}", "", pad = pad),
-        Align::Right => format!("{:pad$}{truncated}", "", pad = pad),
-        Align::Center => {
-            let left = pad / 2;
-            let right = pad - left;
-            format!(
-                "{:left$}{truncated}{:right$}",
-                "",
-                "",
-                left = left,
-                right = right
-            )
-        }
-    }
-}
-
-fn plain_text_width(text: &str) -> usize {
-    text.chars().count()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1748,21 +1648,6 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     );
 }
 
-const fn sort_direction_symbol(direction: crate::model::SortDirection) -> &'static str {
-    match direction {
-        crate::model::SortDirection::Asc => "↑",
-        crate::model::SortDirection::Desc => "↓",
-    }
-}
-
-fn sortable_header(label: &str, app: &AppState, column_key: &str) -> String {
-    if app.sort_by == column_key {
-        format!("{label} {}", sort_direction_symbol(app.sort_direction))
-    } else {
-        label.to_string()
-    }
-}
-
 fn draw_sort_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
     let width = area.width.saturating_mul(45) / 100;
     let height = area.height.saturating_mul(55) / 100;
@@ -2000,19 +1885,19 @@ mod tests {
     };
 
     use super::{
-        Align, background_color, bigkeys_age_title, carat_color, cluster_color_for_token,
-        commandstats_page_len, compute_column_widths, detail_tab_index_for_shortcut,
-        detail_tabs_widget, draw, fit_cell_text, format_aligned_rows, format_with_commas,
-        handle_column_picker_key, handle_overlay_quit_key, handle_primary_view_quit_key,
-        help_bindings, is_force_quit_key, render_overview_table,
+        background_color, bigkeys_age_title, carat_color, commandstats_page_len,
+        compute_column_widths, detail_tab_index_for_shortcut, detail_tabs_widget, draw,
+        format_aligned_rows, format_with_commas, handle_column_picker_key, handle_overlay_quit_key,
+        handle_primary_view_quit_key, help_bindings, is_force_quit_key, ratatui_color_from_cluster,
     };
     use crate::app::{ActiveView, AppState, OverviewModal};
-    use crate::column::{CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
+    use crate::column::{Align, CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
     use crate::config::default_settings;
     use crate::model::{
         BigkeyEntry, BigkeysScanStatus, CommandStat, ErrorDetails, InstanceState, SortMode, Status,
         ViewMode,
     };
+    use crate::overview::{cluster_color_for_token, fit_cell_text, render_plain_text};
     use crate::registry::ColumnRegistry;
 
     fn test_registry() -> ColumnRegistry {
@@ -2407,12 +2292,15 @@ mod tests {
         let row_end = row_start + width;
         let gutter_cell = buffer.content()[row_start..row_end]
             .iter()
-            .find(|cell| cell.symbol() == "│" && cell.fg == cluster_color_for_token("2"))
+            .find(|cell| {
+                cell.symbol() == "│"
+                    && cell.fg == ratatui_color_from_cluster(cluster_color_for_token("2"))
+            })
             .expect("cluster gutter cell rendered with logical-cluster color");
 
         assert_eq!(
             gutter_cell.fg,
-            cluster_color_for_token("2"),
+            ratatui_color_from_cluster(cluster_color_for_token("2")),
             "gutter color should be derived from the logical cluster label"
         );
     }
@@ -3123,7 +3011,7 @@ underlined = true
         app.apply_update(a);
         app.apply_update(b);
 
-        let rendered = render_overview_table(&app);
+        let rendered = render_plain_text(&app.build_overview_frame());
 
         assert!(rendered.contains("Alias"));
         assert!(rendered.contains("Status"));

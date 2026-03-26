@@ -70,6 +70,8 @@ reditop --unix /tmp/redis.sock --tcp 10.0.0.12:6379
 reditop --cluster 7000
 reditop --cluster 10.0.0.11:7000 --cluster 10.0.0.12:7000
 reditop --once
+reditop --output json
+reditop --output json --once
 reditop --autodiscover 10.0.0.12 --once
 reditop --config ~/.config/redis-top.toml
 reditop -c config.toml 127.0.0.1:6379
@@ -104,6 +106,7 @@ Important options:
 
 - `-c, --config <PATH>`
 - `--once`
+- `--output <tui|json>`
 - `--refresh <DURATION>`
 - `--connect-timeout <DURATION>`
 - `--command-timeout <DURATION>`
@@ -120,6 +123,12 @@ Important options:
 `--once` skips the interactive TUI. It performs one polling pass for explicit
 targets, runs autodiscovery/verification for any configured discovery hosts,
 prints the overview table to stdout, and exits.
+
+`--output json` switches the main overview page to newline-delimited JSON
+frames instead of drawing the interactive TUI. Each frame is generated from
+the same centralized overview data model used by the TUI overview, which makes
+the JSON stream suitable for integration testing. When combined with `--once`,
+`reditop` emits a single JSON frame and exits.
 
 Version output includes build metadata:
 

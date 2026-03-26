@@ -25,10 +25,17 @@ pub struct LaunchConfig {
     pub targets: Vec<Target>,
     pub discovery_targets: Vec<DiscoveryTarget>,
     pub discovery_seed_targets: Vec<Target>,
+    pub output_mode: OutputMode,
     pub once: bool,
     pub verbose: bool,
     pub config_path: Option<PathBuf>,
     pub no_default_config: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    Tui,
+    Json,
 }
 
 #[derive(Debug, Parser)]
@@ -81,6 +88,9 @@ struct Cli {
     #[arg(long = "sort", value_enum)]
     sort: Option<CliSortMode>,
 
+    #[arg(long = "output", value_enum, default_value_t = CliOutputMode::Tui)]
+    output: CliOutputMode,
+
     #[arg(long = "no-config")]
     no_config: bool,
 
@@ -115,6 +125,12 @@ enum CliSortMode {
     Lat,
     Latmax,
     Status,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum CliOutputMode {
+    Tui,
+    Json,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -281,6 +297,10 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
         targets: merged_targets,
         discovery_targets,
         discovery_seed_targets,
+        output_mode: match args.output {
+            CliOutputMode::Tui => OutputMode::Tui,
+            CliOutputMode::Json => OutputMode::Json,
+        },
         once: args.once,
         verbose: args.verbose,
         config_path: args.config,
@@ -486,8 +506,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        DiscoveryDefaultMode, DiscoveryPlan, DiscoveryTarget, VERSION, build_discovery_targets,
-        dedupe_discovery_targets,
+        DiscoveryDefaultMode, DiscoveryPlan, DiscoveryTarget, OutputMode, VERSION,
+        build_discovery_targets, dedupe_discovery_targets,
     };
     #[test]
     fn version_string_contains_build_metadata() {
@@ -627,6 +647,14 @@ mod tests {
         let launch = super::build_launch_config_from(cli).expect("launch config should parse");
 
         assert!(launch.once);
+    }
+
+    #[test]
+    fn output_json_selects_json_stream_mode() {
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "--output", "json"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.output_mode, OutputMode::Json);
     }
 
     #[test]
