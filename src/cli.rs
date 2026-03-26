@@ -109,8 +109,9 @@ struct Cli {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliViewMode {
-    Flat,
     Tree,
+    Flat,
+    Primary,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -160,8 +161,9 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
     }
     if let Some(view) = args.view {
         settings.default_view = match view {
-            CliViewMode::Flat => ViewMode::Flat,
             CliViewMode::Tree => ViewMode::Tree,
+            CliViewMode::Flat => ViewMode::Flat,
+            CliViewMode::Primary => ViewMode::Primary,
         };
     }
     if let Some(sort) = args.sort {
@@ -505,6 +507,8 @@ mod tests {
     use clap::Parser;
     use tempfile::tempdir;
 
+    use crate::model::ViewMode;
+
     use super::{
         DiscoveryDefaultMode, DiscoveryPlan, DiscoveryTarget, OutputMode, VERSION,
         build_discovery_targets, dedupe_discovery_targets,
@@ -655,6 +659,14 @@ mod tests {
         let launch = super::build_launch_config_from(cli).expect("launch config should parse");
 
         assert_eq!(launch.output_mode, OutputMode::Json);
+    }
+
+    #[test]
+    fn cli_view_primary_sets_primary_default_view() {
+        let cli = super::Cli::parse_from(["reditop", "--no-config", "--view", "primary"]);
+        let launch = super::build_launch_config_from(cli).expect("launch config should parse");
+
+        assert_eq!(launch.settings.default_view, ViewMode::Primary);
     }
 
     #[test]

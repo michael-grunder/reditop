@@ -245,6 +245,7 @@ fn parse_protocol(raw: Option<&str>, addr: &str) -> Result<TargetProtocol> {
 fn parse_view(raw: Option<&str>) -> Result<Option<ViewMode>> {
     Ok(match raw {
         None => None,
+        Some("primary") => Some(ViewMode::Primary),
         Some("flat") => Some(ViewMode::Flat),
         Some("tree") => Some(ViewMode::Tree),
         Some(other) => bail!("invalid view_default: {other}"),
@@ -319,7 +320,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{apply_overrides, default_settings, load_config, resolve_config_path};
-    use crate::model::{TargetProtocol, UiColor, UiTheme};
+    use crate::model::{TargetProtocol, UiColor, UiTheme, ViewMode};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -358,6 +359,25 @@ critical_color = "red"
         assert_eq!(settings.ui_theme.carat, UiColor::Yellow);
         assert_eq!(settings.ui_theme.warning, UiColor::Magenta);
         assert_eq!(settings.ui_theme.critical, UiColor::Red);
+    }
+
+    #[test]
+    fn load_config_parses_primary_default_view() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[global]
+view_default = "primary"
+"#,
+        )
+        .expect("write config");
+
+        let loaded = load_config(Some(&path), false).expect("load config");
+        let settings = apply_overrides(default_settings(), &loaded.overrides);
+
+        assert_eq!(settings.default_view, ViewMode::Primary);
     }
 
     #[test]

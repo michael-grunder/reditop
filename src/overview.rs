@@ -176,10 +176,7 @@ impl AppState {
             timestamp: format_microtime(SystemTime::now()),
             header: OverviewHeader {
                 refresh_interval_ms: self.settings.refresh_interval.as_millis(),
-                view_mode: match self.view_mode {
-                    crate::model::ViewMode::Flat => "flat",
-                    crate::model::ViewMode::Tree => "tree",
-                },
+                view_mode: self.view_mode.as_str(),
                 sort: OverviewSort {
                     key: self.sort_by.clone(),
                     label: self.sort_label(),
@@ -534,5 +531,15 @@ mod tests {
         assert_eq!(json["header"]["filter"], "alp");
         assert_eq!(json["header"]["is_filtering"], true);
         assert_eq!(json["rows"][0]["cells"][0]["value"], "alpha");
+    }
+
+    #[test]
+    fn overview_frame_reports_primary_view_mode() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.view_mode = ViewMode::Primary;
+
+        let frame = app.build_overview_frame();
+
+        assert_eq!(frame.header.view_mode, "primary");
     }
 }

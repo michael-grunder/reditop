@@ -422,6 +422,7 @@ impl AppState {
         let should_omit_host = self.should_omit_host_in_rendering();
 
         match self.view_mode {
+            ViewMode::Tree => self.build_tree_rows(nodes, should_omit_host, &cluster_labels),
             ViewMode::Flat => {
                 sort_instances(
                     &mut nodes,
@@ -436,7 +437,21 @@ impl AppState {
                     .map(|node| self.to_display_row(node, ""))
                     .collect()
             }
-            ViewMode::Tree => self.build_tree_rows(nodes, should_omit_host, &cluster_labels),
+            ViewMode::Primary => {
+                nodes.retain(|node| node.kind != InstanceType::Replica);
+                sort_instances(
+                    &mut nodes,
+                    &self.sort_by,
+                    self.sort_direction,
+                    &cluster_labels,
+                    should_omit_host,
+                    &self.column_registry,
+                );
+                nodes
+                    .into_iter()
+                    .map(|node| self.to_display_row(node, ""))
+                    .collect()
+            }
         }
     }
 
@@ -1152,6 +1167,38 @@ mod tests {
         );
         assert_eq!(app.render_cell(&rows[0], "role").as_deref(), Some("PRI"));
         assert_eq!(app.render_cell(&rows[1], "role").as_deref(), Some("REP"));
+    }
+
+    #[test]
+    fn primary_view_hides_replicas() {
+        let mut app = app();
+        app.view_mode = ViewMode::Primary;
+
+        let mut replica = InstanceState::new("replica".into(), "127.0.0.1:6380".into());
+        replica.kind = InstanceType::Replica;
+        replica.parent_addr = Some("127.0.0.1:6379".into());
+
+        let mut primary = InstanceState::new("primary".into(), "127.0.0.1:6379".into());
+        primary.kind = InstanceType::Primary;
+
+        let standalone = InstanceState::new("standalone".into(), "127.0.0.1:6381".into());
+
+        app.apply_update(replica);
+        app.apply_update(primary);
+        app.apply_update(standalone);
+
+        let rows = app.visible_rows();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row.key == "primary"));
+        assert!(rows.iter().any(|row| row.key == "standalone"));
+        assert!(!rows.iter().any(|row| row.key == "replica"));
+    }
+
+    #[test]
+    fn view_mode_cycles_through_all_overview_modes() {
+        assert_eq!(ViewMode::Tree.cycle(), ViewMode::Flat);
+        assert_eq!(ViewMode::Flat.cycle(), ViewMode::Primary);
+        assert_eq!(ViewMode::Primary.cycle(), ViewMode::Tree);
     }
 
     #[test]

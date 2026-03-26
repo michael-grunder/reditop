@@ -11,7 +11,7 @@
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
 - Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, and an on-demand `bigkeys` view
   including full server-reported error details when polling fails
-- Tree and flat overview modes
+- Tree, flat, and primary-only overview modes
 - Sorting by currently visible column keys and substring filtering
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
 - Live discovery status in the footer, including queued/probing/verified counts
@@ -26,7 +26,7 @@
 - `F1`: open full help page
 - `F3`: start search input (overview)
 - `F4`: start filter input and clear existing filter (overview)
-- `F5`: toggle tree/flat (overview)
+- `F5`: cycle Tree / Flat / Primary (overview)
 - `F6`: open sort picker from currently visible overview columns
 - `F7`: open overview column picker for toggling and reordering visible columns
 - `H`: open full help page
@@ -36,7 +36,7 @@
 - `Esc`: quit from the overview, close the active overlay window, go back from detail/help, stop filter editing, or leave detail view and clear its active pane filters
 - `Tab` / `Left` / `Right`: cycle detail tabs
 - `S` / `L` / `I` / `C` / `B`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` in detail view
-- `t`: toggle tree/flat
+- `t`: cycle Tree / Flat / Primary
 - `s`: cycle sort column
 - `v`: open overview column picker
 - `Shift+Up/Down`: reorder columns inside the overview column picker
@@ -113,7 +113,7 @@ Important options:
 - `-n, --concurrency <N>`
 - `--autodiscover [HOST]`
 - `--cluster <HOST:PORT>`
-- `--view <flat|tree>`
+- `--view <tree|flat|primary>`
 - `--sort <alias|address|type|cluster|memory|mem|ops|lat|latmax|status>`
 - `--no-config`
 - `-a, --auth <PASSWORD>`

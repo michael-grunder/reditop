@@ -299,7 +299,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::F(1) | KeyCode::Char('H') => app.open_help_view(),
                 KeyCode::Char('?') => app.show_help = !app.show_help,
                 KeyCode::F(5) | KeyCode::Char('t') if app.active_view == ActiveView::Overview => {
-                    app.view_mode = app.view_mode.toggle();
+                    app.view_mode = app.view_mode.cycle();
                     app.clamp_selection();
                 }
                 KeyCode::F(6) if app.active_view == ActiveView::Overview => {
@@ -1562,9 +1562,13 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     };
     frame.render_widget(Paragraph::new(prompt).style(base_style(app)), lines[0]);
 
+    let footer_actions = format!(
+        "F1Help  F3Search  F4Filter  F5{}  F6SortBy  F7Columns",
+        app.view_mode.footer_label()
+    );
     let footer = app.discovery_status.footer_summary().map_or_else(
-        || "F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns".to_string(),
-        |summary| format!("{summary}  |  F1Help  F3Search  F4Filter  F5Tree  F6SortBy  F7Columns"),
+        || footer_actions.clone(),
+        |summary| format!("{summary}  |  {footer_actions}"),
     );
     frame.render_widget(
         Paragraph::new(footer).style(base_style(app).add_modifier(Modifier::BOLD)),
@@ -1597,13 +1601,13 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "F4",
             "Start filter input in overview (clears existing filter)",
         ),
-        ("F5", "Toggle flat/tree view in overview"),
+        ("F5", "Cycle Tree, Flat, and Primary view in overview"),
         ("F6", "Choose sort column in overview"),
         (
             "F7",
             "Toggle visible overview columns and reorder visible ones",
         ),
-        ("t", "Toggle flat/tree view in overview"),
+        ("t", "Cycle Tree, Flat, and Primary view in overview"),
         ("s", "Cycle sort column in overview"),
         ("v", "Open overview column picker"),
         (
@@ -1633,7 +1637,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 toggle flat/tree\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1887,8 +1891,9 @@ mod tests {
     use super::{
         background_color, bigkeys_age_title, carat_color, commandstats_page_len,
         compute_column_widths, detail_tab_index_for_shortcut, detail_tabs_widget, draw,
-        format_aligned_rows, format_with_commas, handle_column_picker_key, handle_overlay_quit_key,
-        handle_primary_view_quit_key, help_bindings, is_force_quit_key, ratatui_color_from_cluster,
+        draw_status_bar, format_aligned_rows, format_with_commas, handle_column_picker_key,
+        handle_overlay_quit_key, handle_primary_view_quit_key, help_bindings, is_force_quit_key,
+        ratatui_color_from_cluster,
     };
     use crate::app::{ActiveView, AppState, OverviewModal};
     use crate::column::{Align, CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
@@ -1948,6 +1953,16 @@ mod tests {
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F4"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F5"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F6"));
+    }
+
+    #[test]
+    fn help_bindings_describe_three_view_cycle() {
+        assert!(
+            help_bindings()
+                .iter()
+                .any(|(keys, description)| *keys == "F5"
+                    && description.contains("Tree, Flat, and Primary"))
+        );
     }
 
     #[test]
@@ -2303,6 +2318,24 @@ mod tests {
             ratatui_color_from_cluster(cluster_color_for_token("2")),
             "gutter color should be derived from the logical cluster label"
         );
+    }
+
+    #[test]
+    fn status_bar_shows_active_view_mode_label() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.view_mode = ViewMode::Primary;
+
+        let backend = TestBackend::new(100, 2);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_status_bar(frame, &app, frame.area()))
+            .expect("status bar draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("F5Primary")));
     }
 
     #[test]

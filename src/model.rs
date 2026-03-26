@@ -6,15 +6,33 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ViewMode {
-    Flat,
     Tree,
+    Flat,
+    Primary,
 }
 
 impl ViewMode {
-    pub const fn toggle(self) -> Self {
+    pub const fn cycle(self) -> Self {
         match self {
-            Self::Flat => Self::Tree,
             Self::Tree => Self::Flat,
+            Self::Flat => Self::Primary,
+            Self::Primary => Self::Tree,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tree => "tree",
+            Self::Flat => "flat",
+            Self::Primary => "primary",
+        }
+    }
+
+    pub const fn footer_label(self) -> &'static str {
+        match self {
+            Self::Tree => "Tree",
+            Self::Flat => "Flat",
+            Self::Primary => "Primary",
         }
     }
 }

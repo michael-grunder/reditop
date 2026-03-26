@@ -21,6 +21,9 @@
 
 ### Changed
 
+- Expand overview view selection to three modes: `Tree` (default), `Flat`, and
+  `Primary`, cycle them from `F5`/`t`, and show the active mode in the footer
+  from startup through each toggle.
 - Treat explicit CLI instances as fixed targets that disable autodiscovery by
   default, while still treating host-only positional inputs as autodiscovery
   hosts.
