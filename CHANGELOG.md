@@ -33,6 +33,9 @@
 
 ### Fixed
 
+- Make detail-pane scrolling and `/` filtering behave consistently across all
+  detail tabs, and clear any active detail filters when returning to the
+  overview.
 - Stop loading unrelated config-defined targets when exact CLI targets are
   provided, while still reusing matching configured target context such as
   alias, username, password, and tags.

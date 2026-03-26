@@ -33,7 +33,7 @@
 - `?`: toggle help
 - `Up/Down`: move selection in overview, or scroll the active detail pane when it has more rows than fit
 - `Enter`: open detail
-- `Esc`: quit from the overview, close the active overlay window, go back from detail/help, or stop filter editing
+- `Esc`: quit from the overview, close the active overlay window, go back from detail/help, stop filter editing, or leave detail view and clear its active pane filters
 - `Tab` / `Left` / `Right`: cycle detail tabs
 - `S` / `L` / `I` / `C` / `B`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` in detail view
 - `t`: toggle tree/flat

@@ -45,25 +45,15 @@ pub struct DisplayRow {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CommandstatsViewState {
+pub struct DetailPaneState {
     pub filter: String,
     pub is_filtering: bool,
     pub scroll_offset: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BigkeysViewState {
-    pub filter: String,
-    pub is_filtering: bool,
-    pub scroll_offset: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DetailTextViewState {
-    pub filter: String,
-    pub is_filtering: bool,
-    pub scroll_offset: usize,
-}
+pub type CommandstatsViewState = DetailPaneState;
+pub type BigkeysViewState = DetailPaneState;
+pub type DetailTextViewState = DetailPaneState;
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppState {
@@ -206,11 +196,7 @@ impl AppState {
     }
 
     pub fn start_commandstats_filter_input(&mut self, clear_existing: bool) {
-        if clear_existing {
-            self.commandstats_view.filter.clear();
-        }
-        self.commandstats_view.is_filtering = true;
-        self.commandstats_view.scroll_offset = 0;
+        self.start_detail_filter_input_for_tab(3, clear_existing);
     }
 
     pub fn visible_commandstats<'a>(
@@ -294,14 +280,7 @@ impl AppState {
     }
 
     pub fn start_detail_text_filter_input(&mut self, clear_existing: bool) {
-        let detail_tab = self.detail_tab;
-        if let Some(view) = self.detail_text_view_mut(detail_tab) {
-            if clear_existing {
-                view.filter.clear();
-            }
-            view.is_filtering = true;
-            view.scroll_offset = 0;
-        }
+        self.start_detail_filter_input_for_tab(self.detail_tab, clear_existing);
     }
 
     pub fn visible_detail_text_lines<'a>(
@@ -356,11 +335,69 @@ impl AppState {
     }
 
     pub fn start_bigkeys_filter_input(&mut self, clear_existing: bool) {
-        if clear_existing {
-            self.bigkeys_view.filter.clear();
+        self.start_detail_filter_input_for_tab(4, clear_existing);
+    }
+
+    pub const fn detail_pane_view(&self, detail_tab: usize) -> Option<&DetailPaneState> {
+        match detail_tab {
+            0 => Some(&self.summary_view),
+            1 => Some(&self.latency_view),
+            2 => Some(&self.info_raw_view),
+            3 => Some(&self.commandstats_view),
+            4 => Some(&self.bigkeys_view),
+            _ => None,
         }
-        self.bigkeys_view.is_filtering = true;
-        self.bigkeys_view.scroll_offset = 0;
+    }
+
+    pub const fn detail_pane_view_mut(
+        &mut self,
+        detail_tab: usize,
+    ) -> Option<&mut DetailPaneState> {
+        match detail_tab {
+            0 => Some(&mut self.summary_view),
+            1 => Some(&mut self.latency_view),
+            2 => Some(&mut self.info_raw_view),
+            3 => Some(&mut self.commandstats_view),
+            4 => Some(&mut self.bigkeys_view),
+            _ => None,
+        }
+    }
+
+    pub fn active_detail_view_mut(&mut self) -> Option<&mut DetailPaneState> {
+        if self.active_view != ActiveView::Detail {
+            return None;
+        }
+
+        self.detail_pane_view_mut(self.detail_tab)
+    }
+
+    pub fn start_active_detail_filter_input(&mut self, clear_existing: bool) {
+        self.start_detail_filter_input_for_tab(self.detail_tab, clear_existing);
+    }
+
+    pub fn clear_detail_filters(&mut self) {
+        for detail_tab in 0..=4 {
+            if let Some(view) = self.detail_pane_view_mut(detail_tab) {
+                view.filter.clear();
+                view.is_filtering = false;
+                view.scroll_offset = 0;
+            }
+        }
+    }
+
+    pub fn close_detail_view(&mut self) {
+        self.clear_detail_filters();
+        self.active_view = ActiveView::Overview;
+    }
+
+    fn start_detail_filter_input_for_tab(&mut self, detail_tab: usize, clear_existing: bool) {
+        if let Some(view) = self.detail_pane_view_mut(detail_tab) {
+            if clear_existing {
+                view.filter.clear();
+            }
+            view.is_filtering = true;
+            view.scroll_offset = 0;
+        }
     }
 
     pub fn visible_bigkeys<'a>(
@@ -1057,7 +1094,7 @@ const fn root_kind_rank(kind: InstanceType) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, FilterPromptMode};
+    use super::{ActiveView, AppState, FilterPromptMode};
     use crate::model::{
         CommandStat, InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode,
         UiTheme, ViewMode,
@@ -1684,5 +1721,58 @@ mod tests {
 
         app.move_detail_text_scroll(0, -5, 4, 3);
         assert_eq!(app.summary_view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn start_active_detail_filter_input_works_for_any_detail_tab() {
+        let mut app = app();
+
+        app.active_view = ActiveView::Detail;
+        app.detail_tab = 0;
+        app.summary_view.filter = "memory".to_string();
+        app.start_active_detail_filter_input(false);
+        assert!(app.summary_view.is_filtering);
+        assert_eq!(app.summary_view.filter, "memory");
+
+        app.detail_tab = 3;
+        app.commandstats_view.filter = "get".to_string();
+        app.commandstats_view.scroll_offset = 7;
+        app.start_active_detail_filter_input(true);
+        assert!(app.commandstats_view.is_filtering);
+        assert!(app.commandstats_view.filter.is_empty());
+        assert_eq!(app.commandstats_view.scroll_offset, 0);
+
+        app.detail_tab = 4;
+        app.bigkeys_view.filter = "session".to_string();
+        app.start_active_detail_filter_input(false);
+        assert!(app.bigkeys_view.is_filtering);
+        assert_eq!(app.bigkeys_view.filter, "session");
+    }
+
+    #[test]
+    fn close_detail_view_clears_all_detail_filters() {
+        let mut app = app();
+        app.active_view = ActiveView::Detail;
+        app.summary_view.filter = "sum".to_string();
+        app.summary_view.is_filtering = true;
+        app.summary_view.scroll_offset = 1;
+        app.latency_view.filter = "lat".to_string();
+        app.info_raw_view.filter = "raw".to_string();
+        app.commandstats_view.filter = "cmd".to_string();
+        app.bigkeys_view.filter = "key".to_string();
+        app.bigkeys_view.is_filtering = true;
+        app.bigkeys_view.scroll_offset = 3;
+
+        app.close_detail_view();
+
+        assert_eq!(app.active_view, ActiveView::Overview);
+        for detail_tab in 0..=4 {
+            let view = app
+                .detail_pane_view(detail_tab)
+                .expect("detail pane should exist");
+            assert!(view.filter.is_empty());
+            assert!(!view.is_filtering);
+            assert_eq!(view.scroll_offset, 0);
+        }
     }
 }

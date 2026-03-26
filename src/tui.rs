@@ -222,7 +222,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
-            if let Some(view) = app.detail_text_view_mut(app.detail_tab)
+            if let Some(view) = app.active_detail_view_mut()
                 && view.is_filtering
             {
                 match key.code {
@@ -291,15 +291,15 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                     app.start_filter_input(FilterPromptMode::Filter, false);
                 }
                 KeyCode::Char('/') if is_commandstats_detail(&app) => {
-                    app.start_commandstats_filter_input(false);
+                    app.start_active_detail_filter_input(false);
                     sync_commandstats_view(&mut app, terminal.size()?.height);
                 }
                 KeyCode::Char('/') if is_bigkeys_detail(&app) => {
-                    app.start_bigkeys_filter_input(false);
+                    app.start_active_detail_filter_input(false);
                     sync_bigkeys_view(&mut app, terminal.size()?.height);
                 }
                 KeyCode::Char('/') if is_detail_text_tab(&app) => {
-                    app.start_detail_text_filter_input(false);
+                    app.start_active_detail_filter_input(false);
                     sync_detail_views(&mut app, terminal.size()?.height);
                 }
                 KeyCode::Char('r' | 'R') => {
@@ -368,12 +368,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::Char('q') | KeyCode::Esc
                     if handle_primary_view_quit_key(&mut app, key) => {}
                 KeyCode::Esc if app.active_view == ActiveView::Detail => {
-                    app.summary_view.is_filtering = false;
-                    app.latency_view.is_filtering = false;
-                    app.info_raw_view.is_filtering = false;
-                    app.commandstats_view.is_filtering = false;
-                    app.bigkeys_view.is_filtering = false;
-                    app.active_view = ActiveView::Overview;
+                    app.close_detail_view();
                 }
                 KeyCode::Esc if app.active_view == ActiveView::Help => app.close_help_view(),
                 KeyCode::Tab | KeyCode::Right if app.active_view == ActiveView::Detail => {
