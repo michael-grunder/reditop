@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 use crate::hotkeys::{HotkeysMetric, HotkeysStatus, parse_hotkeys_get};
 use crate::model::{
@@ -16,9 +17,9 @@ use crate::target_addr::{canonical_host, strip_host};
 const BIGKEYS_SCAN_COUNT: usize = 256;
 const BIGKEYS_TOP_N: usize = 20;
 const HOTKEYS_TOP_N: usize = 20;
-const HOTKEYS_DURATION: Duration = Duration::from_secs(3);
+const HOTKEYS_DURATION: Duration = Duration::from_secs(60);
 const HOTKEYS_GET_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const HOTKEYS_GET_MAX_ATTEMPTS: usize = 16;
+const HOTKEYS_GET_MAX_ATTEMPTS: usize = 256;
 
 #[derive(Debug, Clone)]
 pub enum PollerRequest {
@@ -33,6 +34,14 @@ pub enum PollerRequest {
         metric: HotkeysMetric,
         force: bool,
     },
+    StopHotkeys {
+        key: String,
+    },
+}
+
+struct HotkeysTask {
+    stop_tx: oneshot::Sender<()>,
+    handle: JoinHandle<()>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -42,10 +51,12 @@ pub fn start(
 ) -> (mpsc::Receiver<InstanceState>, mpsc::Sender<PollerRequest>) {
     let (update_tx, update_rx) = mpsc::channel(1024);
     let (request_tx, mut request_rx) = mpsc::channel::<PollerRequest>(32);
+    let (task_update_tx, mut task_update_rx) = mpsc::channel::<InstanceState>(128);
 
     tokio::spawn(async move {
         let semaphore = Arc::new(Semaphore::new(settings.concurrency_limit.max(1)));
         let mut known_states: HashMap<String, InstanceState> = HashMap::new();
+        let mut hotkeys_tasks: HashMap<String, HotkeysTask> = HashMap::new();
         let mut target_map: HashMap<String, Target> = targets
             .into_iter()
             .map(|target| (target.addr.clone(), target))
@@ -54,6 +65,16 @@ pub fn start(
 
         loop {
             let request = tokio::select! {
+                Some(update) = task_update_rx.recv() => {
+                    if let Some(task) = hotkeys_tasks.remove(&update.key) {
+                        task.handle.abort();
+                    }
+                    known_states.insert(update.key.clone(), update.clone());
+                    if update_tx.send(update).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 _ = ticker.tick() => Some(PollerRequest::RefreshAll),
                 maybe = request_rx.recv() => maybe,
             };
@@ -145,16 +166,31 @@ pub fn start(
                     if update_tx.send(running.clone()).await.is_err() {
                         return;
                     }
-                    known_states.insert(key.clone(), running);
+                    known_states.insert(key.clone(), running.clone());
 
-                    let updated = {
-                        let _permit = semaphore.clone().acquire_owned().await.ok();
-                        poll_hotkeys(target, &settings, prior, metric).await
-                    };
-                    known_states.insert(updated.key.clone(), updated.clone());
-                    if update_tx.send(updated).await.is_err() {
-                        return;
+                    if let Some(task) = hotkeys_tasks.remove(&key) {
+                        let _ = task.stop_tx.send(());
+                        task.handle.abort();
                     }
+
+                    let (stop_tx, stop_rx) = oneshot::channel();
+                    let target = target.clone();
+                    let settings = settings.clone();
+                    let semaphore = semaphore.clone();
+                    let task_update_tx = task_update_tx.clone();
+                    let handle = tokio::spawn(async move {
+                        let _permit = semaphore.acquire_owned().await.ok();
+                        let updated =
+                            poll_hotkeys(&target, &settings, prior, metric, stop_rx).await;
+                        let _ = task_update_tx.send(updated).await;
+                    });
+                    hotkeys_tasks.insert(key, HotkeysTask { stop_tx, handle });
+                }
+                PollerRequest::StopHotkeys { key } => {
+                    let Some(task) = hotkeys_tasks.remove(&key) else {
+                        continue;
+                    };
+                    let _ = task.stop_tx.send(());
                 }
             }
         }
@@ -324,6 +360,7 @@ async fn poll_hotkeys(
     settings: &RuntimeSettings,
     mut state: InstanceState,
     metric: HotkeysMetric,
+    stop_rx: oneshot::Receiver<()>,
 ) -> InstanceState {
     let client = match Client::open(redis_url(target)) {
         Ok(client) => client,
@@ -365,7 +402,20 @@ async fn poll_hotkeys(
         return state;
     }
 
-    tokio::time::sleep(HOTKEYS_DURATION).await;
+    let manually_stopped = tokio::select! {
+        () = tokio::time::sleep(HOTKEYS_DURATION) => false,
+        result = stop_rx => result.is_ok(),
+    };
+
+    if manually_stopped
+        && let Err(err) = redis::cmd("HOTKEYS")
+            .arg("STOP")
+            .query_async::<String>(&mut conn)
+            .await
+    {
+        apply_hotkeys_failure(&mut state, metric, err.to_string());
+        return state;
+    }
 
     for _ in 0..HOTKEYS_GET_MAX_ATTEMPTS {
         match redis::cmd("HOTKEYS")
@@ -509,6 +559,7 @@ fn apply_hotkeys_failure(state: &mut InstanceState, metric: HotkeysMetric, messa
     state.detail.hotkeys.last_error = Some(truncate_string(message, 120));
     state.detail.hotkeys.selected_metric = Some(metric);
     state.detail.hotkeys.tracking_active = false;
+    state.detail.hotkeys.started_at = None;
     state.detail.hotkeys.finishes_at = None;
     state.detail.hotkeys.last_completed = Some(Instant::now());
 }

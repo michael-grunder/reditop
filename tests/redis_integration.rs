@@ -214,3 +214,68 @@ async fn standalone_hotkeys_sampling_works_against_live_redis() {
         assert!(sampled.detail.hotkeys.last_error.is_none());
     }
 }
+
+#[tokio::test]
+async fn standalone_hotkeys_sampling_can_stop_early() {
+    let target = standalone_target();
+    let settings = runtime_settings();
+    let (mut update_rx, request_tx) = start(vec![target.clone()], settings);
+
+    let state = recv_state(&mut update_rx, &target.addr).await;
+    if state.status != reditop::model::Status::Ok {
+        skip_unreachable(
+            "standalone redis",
+            state.last_error.as_deref().unwrap_or("poll failed"),
+        );
+        return;
+    }
+
+    request_tx
+        .send(PollerRequest::StartHotkeys {
+            key: target.addr.clone(),
+            metric: HotkeysMetric::Cpu,
+            force: true,
+        })
+        .await
+        .expect("failed to request hotkeys sampling");
+
+    let running = recv_state(&mut update_rx, &target.addr).await;
+    assert_eq!(running.detail.hotkeys.status, HotkeysStatus::Running);
+
+    if let Err(err) = generate_hotkeys_traffic(&target).await {
+        skip_unreachable("hotkeys traffic generation", &err.to_string());
+        return;
+    }
+
+    request_tx
+        .send(PollerRequest::StopHotkeys {
+            key: target.addr.clone(),
+        })
+        .await
+        .expect("failed to request hotkeys stop");
+
+    let sampled = recv_state(&mut update_rx, &target.addr).await;
+    if sampled.detail.hotkeys.status == HotkeysStatus::Failed {
+        let error = sampled
+            .detail
+            .hotkeys
+            .last_error
+            .clone()
+            .unwrap_or_else(|| "unknown hotkeys error".to_string());
+        if error.to_ascii_lowercase().contains("unknown command")
+            || error.to_ascii_lowercase().contains("hotkeys")
+        {
+            skip_unreachable("standalone hotkeys stop", &error);
+            return;
+        }
+        panic!("hotkeys stop failed: {error}");
+    }
+
+    assert_eq!(sampled.detail.hotkeys.status, HotkeysStatus::Ready);
+    assert_eq!(
+        sampled.detail.hotkeys.selected_metric,
+        Some(HotkeysMetric::Cpu)
+    );
+    assert!(!sampled.detail.hotkeys.tracking_active);
+    assert!(sampled.detail.hotkeys.last_error.is_none());
+}

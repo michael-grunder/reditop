@@ -88,6 +88,10 @@ impl HotkeysMetrics {
         self.finishes_at = Some(now + duration);
     }
 
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
     pub fn remaining_seconds(&self) -> Option<u64> {
         let remaining = self
             .finishes_at?

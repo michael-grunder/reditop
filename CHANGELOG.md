@@ -25,6 +25,9 @@
 
 ### Changed
 
+- Change the `Hotkeys` detail pane shortcut to `K`, extend its default sampling
+  duration to 60 seconds, and show rerun/reset affordances after a sample
+  completes.
 - Expand overview view selection to three modes: `Tree` (default), `Flat`, and
   `Primary`, cycle them from `F5`/`t`, and show the active mode in the footer
   from startup through each toggle.
@@ -45,6 +48,9 @@
 
 ### Fixed
 
+- Allow `Hotkeys` sampling to stop early with `X` by issuing `HOTKEYS STOP`
+  before fetching results, instead of forcing the full default duration every
+  time.
 - Make detail-pane scrolling and `/` filtering behave consistently across all
   detail tabs, and clear any active detail filters when returning to the
   overview.

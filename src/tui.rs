@@ -57,7 +57,7 @@ const DETAIL_TABS: [DetailTabSpec; 6] = [
     },
     DetailTabSpec {
         title: "Hotkeys",
-        shortcut: 'h',
+        shortcut: 'k',
     },
 ];
 
@@ -369,6 +369,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::Char('n' | 'N') if is_hotkeys_detail(&app) => {
                     start_hotkeys_sampling(&mut app, &request_tx, HotkeysMetric::Net, true);
                 }
+                KeyCode::Char('x' | 'X') if is_hotkeys_detail(&app) => {
+                    handle_hotkeys_stop_or_reset(&mut app, &request_tx);
+                }
                 KeyCode::Char('r' | 'R') => {
                     let request = if is_hotkeys_detail(&app) {
                         let metric = current_hotkeys(&app)
@@ -677,9 +680,33 @@ fn start_hotkeys_sampling(
         instance
             .detail
             .hotkeys
-            .start(metric, std::time::Duration::from_secs(3));
+            .start(metric, std::time::Duration::from_secs(60));
     }
     let _ = request_tx.try_send(PollerRequest::StartHotkeys { key, metric, force });
+}
+
+fn handle_hotkeys_stop_or_reset(
+    app: &mut AppState,
+    request_tx: &tokio::sync::mpsc::Sender<PollerRequest>,
+) {
+    let Some(key) = app.selected_key() else {
+        return;
+    };
+
+    let is_running = app
+        .instances
+        .get(&key)
+        .is_some_and(|instance| instance.detail.hotkeys.status == HotkeysStatus::Running);
+
+    if is_running {
+        let _ = request_tx.try_send(PollerRequest::StopHotkeys { key });
+        return;
+    }
+
+    if let Some(instance) = app.instances.get_mut(&key) {
+        instance.detail.hotkeys.reset();
+    }
+    sync_hotkeys_view(app, 0);
 }
 
 const fn is_force_quit_key(key: KeyEvent) -> bool {
@@ -1286,7 +1313,7 @@ fn draw_hotkeys(
     if hotkeys.status == HotkeysStatus::Idle {
         frame.render_widget(
             Paragraph::new(
-                "Start hotkeys sampling:\n\n[C] CPU\n[N] NET\n\nSampling runs for 3 seconds and then results are fetched automatically.",
+                "Start hotkeys sampling:\n\n[C] CPU\n[N] NET\n\nSampling runs for 60 seconds by default.\nPress [X] to stop early once sampling is running.",
             )
             .style(base_style(app))
             .block(block)
@@ -1301,7 +1328,7 @@ fn draw_hotkeys(
         let remaining = hotkeys.remaining_seconds().unwrap_or(0);
         frame.render_widget(
             Paragraph::new(format!(
-                "Sampling {metric} hotkeys...\n\nTime remaining: {remaining}s"
+                "Sampling {metric} hotkeys...\n\nTime remaining: {remaining}s\nPress [X] to stop early and fetch results now."
             ))
             .style(base_style(app))
             .block(block),
@@ -1325,9 +1352,10 @@ fn draw_hotkeys(
 
     if hotkeys.entries.is_empty() {
         frame.render_widget(
-            Paragraph::new("No hotkeys found")
+            Paragraph::new("No hotkeys found\n\nPress [C] or [N] to run again, [R] to rerun the last metric, or [X] to reset this pane.")
                 .style(base_style(app))
-                .block(block),
+                .block(block)
+                .wrap(Wrap { trim: false }),
             area,
         );
         return;
@@ -1404,6 +1432,8 @@ fn hotkeys_title(
         && let Some(remaining) = hotkeys.remaining_seconds()
     {
         let _ = write!(title, "  sampling={remaining}s");
+    } else if hotkeys.status != HotkeysStatus::Idle {
+        let _ = write!(title, "  C/N run  R rerun  X reset");
     }
     if let Some(error) = &hotkeys.last_error {
         let _ = write!(title, "  error={}", truncate_for_title(error, 40));
@@ -1868,7 +1898,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ("Tab/Right", "Next detail panel"),
         ("Left", "Previous detail panel"),
         (
-            "S / L / I / C / B / H",
+            "S / L / I / C / B / K",
             "Jump to Summary, Latency, Info Raw, Commandstats, Bigkeys, or Hotkeys in detail",
         ),
         (
@@ -1879,6 +1909,10 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         (
             "C / N",
             "Start CPU or NET hotkeys sampling while on Hotkeys",
+        ),
+        (
+            "X",
+            "Stop active Hotkeys sampling early, or reset the Hotkeys pane when idle/complete",
         ),
         (
             "r / R",
@@ -1925,7 +1959,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/H jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/K jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nX stops active Hotkeys sampling early or resets the pane\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -2235,6 +2269,11 @@ mod tests {
     }
 
     #[test]
+    fn help_bindings_include_hotkeys_stop_or_reset_shortcut() {
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "X"));
+    }
+
+    #[test]
     fn help_bindings_include_function_keys() {
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F1"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F3"));
@@ -2260,7 +2299,7 @@ mod tests {
         assert_eq!(detail_tab_index_for_shortcut('i'), Some(2));
         assert_eq!(detail_tab_index_for_shortcut('C'), Some(3));
         assert_eq!(detail_tab_index_for_shortcut('b'), Some(4));
-        assert_eq!(detail_tab_index_for_shortcut('h'), Some(5));
+        assert_eq!(detail_tab_index_for_shortcut('k'), Some(5));
         assert_eq!(detail_tab_index_for_shortcut('x'), None);
     }
 
@@ -2647,7 +2686,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("[L]atency")));
         assert!(lines.iter().any(|line| line.contains("[I]nfo Raw")));
         assert!(lines.iter().any(|line| line.contains("[C]ommandstats")));
-        assert!(lines.iter().any(|line| line.contains("[H]otkeys")));
+        assert!(lines.iter().any(|line| line.contains("[K]Hotkeys")));
 
         let line_index = lines
             .iter()
@@ -3030,6 +3069,8 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("[N] NET") || line.contains("N] NET"))
         );
+        assert!(lines.iter().any(|line| line.contains("60 seconds")));
+        assert!(lines.iter().any(|line| line.contains("[X]")));
     }
 
     #[test]

@@ -36,7 +36,7 @@
 - `Enter`: open detail
 - `Esc`: quit from the overview, close the active overlay window, go back from detail/help, stop filter editing, or leave detail view and clear its active pane filters
 - `Tab` / `Left` / `Right`: cycle detail tabs
-- `S` / `L` / `I` / `C` / `B` / `h`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` / `Hotkeys` in detail view
+- `S` / `L` / `I` / `C` / `B` / `K`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` / `Hotkeys` in detail view
 - `t`: cycle Tree / Flat / Primary
 - `s`: cycle sort column
 - `v`: open overview column picker
@@ -44,6 +44,7 @@
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
 - `/`: start filter input in overview, or filter the active detail pane in detail view (`Summary`, `Latency`, `Info Raw`, `Commandstats`, `Bigkeys`, or `Hotkeys`)
 - `C` / `N`: start CPU or NET sampling while the `Hotkeys` tab is open
+- `X`: stop active `Hotkeys` sampling early, or reset the `Hotkeys` pane back to its idle prompt
 - `r` / `R`: refresh now, rerun the on-demand `Bigkeys` scan, or rerun `Hotkeys` sampling for the last selected metric while that tab is open
 
 The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace with
@@ -56,11 +57,14 @@ performed on demand when the `Bigkeys` tab is opened or refreshed. The header
 shows when a scan is in progress, and after completion it shows the result age
 in seconds.
 
-The `Hotkeys` detail tab uses Redis `HOTKEYS START ... DURATION 3` so sampling
+The `Hotkeys` detail tab uses Redis `HOTKEYS START ... DURATION 60` so sampling
 always stops automatically even if the TUI exits mid-run. The pane starts in an
 idle prompt where you can choose `CPU` or `NET` sampling, shows a live
-countdown while tracking is active, and then fetches `HOTKEYS GET` results into
-a filterable, scrollable table with per-key share percentages.
+countdown while tracking is active, lets you stop early with `X` by issuing
+`HOTKEYS STOP`, and then fetches `HOTKEYS GET` results into a filterable,
+scrollable table with per-key share percentages. After completion, `C`/`N` can
+start a fresh run, `R` reruns the last metric, and `X` resets the pane back to
+its idle prompt.
 
 ## CLI
 
