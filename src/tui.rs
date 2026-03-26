@@ -13,7 +13,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
@@ -1324,14 +1324,10 @@ fn draw_hotkeys(
     }
 
     if hotkeys.status == HotkeysStatus::Running {
-        let metric = hotkeys.selected_metric.map_or("?", HotkeysMetric::label);
-        let remaining = hotkeys.remaining_seconds().unwrap_or(0);
         frame.render_widget(
-            Paragraph::new(format!(
-                "Sampling {metric} hotkeys...\n\nTime remaining: {remaining}s\nPress [X] to stop early and fetch results now."
-            ))
-            .style(base_style(app))
-            .block(block),
+            Paragraph::new("Sampling hotkeys...")
+                .style(base_style(app))
+                .block(block),
             area,
         );
         return;
@@ -1428,17 +1424,27 @@ fn hotkeys_title(
     if !app.hotkeys_view.filter.is_empty() {
         let _ = write!(title, "  filter=/{}", app.hotkeys_view.filter);
     }
-    if hotkeys.status == HotkeysStatus::Running
-        && let Some(remaining) = hotkeys.remaining_seconds()
-    {
-        let _ = write!(title, "  sampling={remaining}s");
-    } else if hotkeys.status != HotkeysStatus::Idle {
+    if hotkeys.status != HotkeysStatus::Idle && hotkeys.status != HotkeysStatus::Running {
         let _ = write!(title, "  C/N run  R rerun  X reset");
     }
     if let Some(error) = &hotkeys.last_error {
         let _ = write!(title, "  error={}", truncate_for_title(error, 40));
     }
     title
+}
+
+fn hotkeys_sampling_title(hotkeys: &crate::hotkeys::HotkeysMetrics) -> Option<Line<'static>> {
+    if hotkeys.status != HotkeysStatus::Running {
+        return None;
+    }
+
+    let remaining = hotkeys.remaining_seconds().unwrap_or(0);
+    Some(
+        Line::from(format!(
+            "Time remaining: {remaining}s  Press [X] to stop early and fetch results now."
+        ))
+        .alignment(Alignment::Center),
+    )
 }
 
 fn bigkeys_age_title(bigkeys: &crate::model::BigkeysMetrics) -> Option<Line<'static>> {
@@ -1482,9 +1488,9 @@ fn hotkeys_block(
         .title(hotkeys_title(app, hotkeys, visible_total, start, end))
         .style(base_style(app));
 
-    if hotkeys.status != HotkeysStatus::Running
-        && let Some(instant) = hotkeys.last_completed
-    {
+    if let Some(sampling_title) = hotkeys_sampling_title(hotkeys) {
+        block = block.title(sampling_title);
+    } else if let Some(instant) = hotkeys.last_completed {
         block = block
             .title(Line::from(format!("age: {}s", instant.elapsed().as_secs())).right_aligned());
     }
@@ -3123,6 +3129,54 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("50.00%")));
         assert!(lines.iter().any(|line| line.contains("alpha")));
         assert!(!lines.iter().any(|line| line.contains("beta")));
+    }
+
+    #[test]
+    fn detail_hotkeys_sampling_moves_status_into_header() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 5;
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.hotkeys.status = crate::hotkeys::HotkeysStatus::Running;
+        instance.detail.hotkeys.selected_metric = Some(crate::hotkeys::HotkeysMetric::Cpu);
+        instance.detail.hotkeys.started_at = Some(
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(11))
+                .expect("instant subtraction stays in range"),
+        );
+        instance.detail.hotkeys.finishes_at =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(49));
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(120, 18);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("Hotkeys CPU")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Time remaining: 49s"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Press [X] to stop early"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Sampling hotkeys..."))
+        );
+        assert!(!lines.iter().any(|line| line.contains("sampling=49s")));
     }
 
     #[test]

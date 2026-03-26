@@ -28,6 +28,9 @@
 - Change the `Hotkeys` detail pane shortcut to `K`, extend its default sampling
   duration to 60 seconds, and show rerun/reset affordances after a sample
   completes.
+- Rework the `Hotkeys` sampling header so the left title stays `Hotkeys <type>`
+  while the live countdown and `[X]` stop hint render in the centered title
+  area instead of repeating the same state in the body.
 - Render detail-pane tab shortcuts inline with each title, for example
   `Hot[K]eys` instead of prefixing the label as `[K]Hotkeys`.
 - Expand overview view selection to three modes: `Tree` (default), `Flat`, and
