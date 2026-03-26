@@ -2,6 +2,10 @@
 
 ### Added
 
+- Add a new `Hotkeys` detail pane that can start timed Redis `HOTKEYS`
+  sampling for `CPU` or `NET`, show a live countdown, fetch the results
+  automatically, and browse them with the same `/` filtering and scrolling
+  behavior as the other detailed TUI panes.
 - Add a shared overview-frame data model that now feeds the main TUI overview
   and can also be emitted as newline-delimited JSON with `--output json`,
   including a single-frame `--once --output json` mode for integration tests.

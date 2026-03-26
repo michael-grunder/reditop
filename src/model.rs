@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
+use crate::hotkeys::HotkeysMetrics;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ViewMode {
     Tree,
@@ -224,6 +226,7 @@ pub struct DetailMetrics {
     pub cluster_enabled: bool,
     pub commandstats: Vec<CommandStat>,
     pub bigkeys: BigkeysMetrics,
+    pub hotkeys: HotkeysMetrics,
     pub raw_info: Option<String>,
 }
 

@@ -22,6 +22,7 @@ use crate::app::{ActiveView, AppState, FilterPromptMode, OverviewModal};
 use crate::cli::{LaunchConfig, OutputMode};
 use crate::column::EmphasisStyle;
 use crate::discovery::{self, DiscoveryEvent};
+use crate::hotkeys::{HotkeysMetric, HotkeysStatus};
 use crate::overview::{
     ClusterGutterColor, fit_cell_text, render_plain_text, sort_direction_symbol, sortable_header,
 };
@@ -33,7 +34,7 @@ struct DetailTabSpec {
     shortcut: char,
 }
 
-const DETAIL_TABS: [DetailTabSpec; 5] = [
+const DETAIL_TABS: [DetailTabSpec; 6] = [
     DetailTabSpec {
         title: "Summary",
         shortcut: 's',
@@ -53,6 +54,10 @@ const DETAIL_TABS: [DetailTabSpec; 5] = [
     DetailTabSpec {
         title: "Bigkeys",
         shortcut: 'b',
+    },
+    DetailTabSpec {
+        title: "Hotkeys",
+        shortcut: 'h',
     },
 ];
 
@@ -256,6 +261,24 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
+            if app.hotkeys_view.is_filtering {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        app.hotkeys_view.is_filtering = false;
+                    }
+                    KeyCode::Backspace => {
+                        let _ = app.hotkeys_view.filter.pop();
+                        sync_hotkeys_view(&mut app, terminal.size()?.height);
+                    }
+                    KeyCode::Char(ch) => {
+                        app.hotkeys_view.filter.push(ch);
+                        sync_hotkeys_view(&mut app, terminal.size()?.height);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if let Some(view) = app.active_detail_view_mut()
                 && view.is_filtering
             {
@@ -332,12 +355,28 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                     app.start_active_detail_filter_input(false);
                     sync_bigkeys_view(&mut app, terminal.size()?.height);
                 }
+                KeyCode::Char('/') if is_hotkeys_detail(&app) => {
+                    app.start_active_detail_filter_input(false);
+                    sync_hotkeys_view(&mut app, terminal.size()?.height);
+                }
                 KeyCode::Char('/') if is_detail_text_tab(&app) => {
                     app.start_active_detail_filter_input(false);
                     sync_detail_views(&mut app, terminal.size()?.height);
                 }
+                KeyCode::Char('c' | 'C') if is_hotkeys_detail(&app) => {
+                    start_hotkeys_sampling(&mut app, &request_tx, HotkeysMetric::Cpu, true);
+                }
+                KeyCode::Char('n' | 'N') if is_hotkeys_detail(&app) => {
+                    start_hotkeys_sampling(&mut app, &request_tx, HotkeysMetric::Net, true);
+                }
                 KeyCode::Char('r' | 'R') => {
-                    let request = if is_bigkeys_detail(&app) {
+                    let request = if is_hotkeys_detail(&app) {
+                        let metric = current_hotkeys(&app)
+                            .and_then(|hotkeys| hotkeys.selected_metric)
+                            .unwrap_or(HotkeysMetric::Cpu);
+                        start_hotkeys_sampling(&mut app, &request_tx, metric, true);
+                        None
+                    } else if is_bigkeys_detail(&app) {
                         app.selected_key().map(|key| {
                             mark_bigkeys_running(&mut app, &key);
                             PollerRequest::RefreshBigkeys { key, force: true }
@@ -375,6 +414,20 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                         let page_len = bigkeys_page_len(terminal.size()?.height);
                         let visible_len = app.visible_bigkeys(&bigkeys.largest_keys).len();
                         app.move_bigkeys_scroll(1, visible_len, page_len);
+                    }
+                }
+                KeyCode::Up if is_hotkeys_detail(&app) => {
+                    if let Some(hotkeys) = current_hotkeys(&app) {
+                        let page_len = hotkeys_page_len(terminal.size()?.height);
+                        let visible_len = app.visible_hotkeys(&hotkeys.entries).len();
+                        app.move_hotkeys_scroll(-1, visible_len, page_len);
+                    }
+                }
+                KeyCode::Down if is_hotkeys_detail(&app) => {
+                    if let Some(hotkeys) = current_hotkeys(&app) {
+                        let page_len = hotkeys_page_len(terminal.size()?.height);
+                        let visible_len = app.visible_hotkeys(&hotkeys.entries).len();
+                        app.move_hotkeys_scroll(1, visible_len, page_len);
                     }
                 }
                 KeyCode::Up if is_detail_text_tab(&app) => {
@@ -458,6 +511,12 @@ fn current_bigkeys(app: &AppState) -> Option<&crate::model::BigkeysMetrics> {
     Some(&instance.detail.bigkeys)
 }
 
+fn current_hotkeys(app: &AppState) -> Option<&crate::hotkeys::HotkeysMetrics> {
+    let key = app.selected_key()?;
+    let instance = app.instances.get(&key)?;
+    Some(&instance.detail.hotkeys)
+}
+
 fn current_detail_text_body(app: &AppState) -> Option<String> {
     let key = app.selected_key()?;
     let instance = app.instances.get(&key)?;
@@ -470,6 +529,10 @@ fn is_commandstats_detail(app: &AppState) -> bool {
 
 fn is_bigkeys_detail(app: &AppState) -> bool {
     app.active_view == ActiveView::Detail && app.detail_tab == 4
+}
+
+fn is_hotkeys_detail(app: &AppState) -> bool {
+    app.active_view == ActiveView::Detail && app.detail_tab == 5
 }
 
 fn is_detail_text_tab(app: &AppState) -> bool {
@@ -519,10 +582,23 @@ fn sync_bigkeys_view(app: &mut AppState, terminal_height: u16) {
     app.clamp_bigkeys_scroll(row_count, page_len);
 }
 
+fn sync_hotkeys_view(app: &mut AppState, terminal_height: u16) {
+    if !is_hotkeys_detail(app) {
+        app.hotkeys_view.is_filtering = false;
+        return;
+    }
+
+    let page_len = hotkeys_page_len(terminal_height);
+    let row_count =
+        current_hotkeys(app).map_or(0, |hotkeys| app.visible_hotkeys(&hotkeys.entries).len());
+    app.clamp_hotkeys_scroll(row_count, page_len);
+}
+
 fn sync_detail_views(app: &mut AppState, terminal_height: u16) {
     sync_detail_text_view(app, terminal_height);
     sync_commandstats_view(app, terminal_height);
     sync_bigkeys_view(app, terminal_height);
+    sync_hotkeys_view(app, terminal_height);
 }
 
 const fn commandstats_page_len(area_height: u16) -> usize {
@@ -534,6 +610,14 @@ const fn commandstats_page_len(area_height: u16) -> usize {
 }
 
 const fn bigkeys_page_len(area_height: u16) -> usize {
+    if area_height <= 5 {
+        1
+    } else {
+        area_height as usize - 5
+    }
+}
+
+const fn hotkeys_page_len(area_height: u16) -> usize {
     if area_height <= 5 {
         1
     } else {
@@ -577,6 +661,25 @@ fn mark_bigkeys_running(app: &mut AppState, key: &str) {
         instance.detail.bigkeys.status = crate::model::BigkeysScanStatus::Running;
         instance.detail.bigkeys.last_error = None;
     }
+}
+
+fn start_hotkeys_sampling(
+    app: &mut AppState,
+    request_tx: &tokio::sync::mpsc::Sender<PollerRequest>,
+    metric: HotkeysMetric,
+    force: bool,
+) {
+    let Some(key) = app.selected_key() else {
+        return;
+    };
+
+    if let Some(instance) = app.instances.get_mut(&key) {
+        instance
+            .detail
+            .hotkeys
+            .start(metric, std::time::Duration::from_secs(3));
+    }
+    let _ = request_tx.try_send(PollerRequest::StartHotkeys { key, metric, force });
 }
 
 const fn is_force_quit_key(key: KeyEvent) -> bool {
@@ -1002,7 +1105,8 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             &detail_text_body(instance, 2),
         ),
         3 => draw_commandstats(frame, app, chunks[2], &instance.detail.commandstats),
-        _ => draw_bigkeys(frame, app, chunks[2], &instance.detail.bigkeys),
+        4 => draw_bigkeys(frame, app, chunks[2], &instance.detail.bigkeys),
+        _ => draw_hotkeys(frame, app, chunks[2], &instance.detail.hotkeys),
     }
 }
 
@@ -1170,6 +1274,78 @@ fn draw_bigkeys(
     frame.render_widget(bigkeys_table(app, area.height, bigkeys), area);
 }
 
+fn draw_hotkeys(
+    frame: &mut ratatui::Frame<'_>,
+    app: &AppState,
+    area: Rect,
+    hotkeys: &crate::hotkeys::HotkeysMetrics,
+) {
+    let visible_total = app.visible_hotkeys(&hotkeys.entries).len();
+    let block = hotkeys_block(app, hotkeys, visible_total, 0, visible_total);
+
+    if hotkeys.status == HotkeysStatus::Idle {
+        frame.render_widget(
+            Paragraph::new(
+                "Start hotkeys sampling:\n\n[C] CPU\n[N] NET\n\nSampling runs for 3 seconds and then results are fetched automatically.",
+            )
+            .style(base_style(app))
+            .block(block)
+            .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+
+    if hotkeys.status == HotkeysStatus::Running {
+        let metric = hotkeys.selected_metric.map_or("?", HotkeysMetric::label);
+        let remaining = hotkeys.remaining_seconds().unwrap_or(0);
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Sampling {metric} hotkeys...\n\nTime remaining: {remaining}s"
+            ))
+            .style(base_style(app))
+            .block(block),
+            area,
+        );
+        return;
+    }
+
+    if let Some(error) = &hotkeys.last_error
+        && hotkeys.entries.is_empty()
+    {
+        frame.render_widget(
+            Paragraph::new(error.clone())
+                .style(base_style(app))
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+
+    if hotkeys.entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No hotkeys found")
+                .style(base_style(app))
+                .block(block),
+            area,
+        );
+        return;
+    }
+
+    if visible_total == 0 {
+        frame.render_widget(
+            Paragraph::new("No hotkeys match the current filter")
+                .style(base_style(app))
+                .block(block),
+            area,
+        );
+        return;
+    }
+
+    frame.render_widget(hotkeys_table(app, area.height, hotkeys), area);
+}
+
 fn commandstats_title(app: &AppState, start: usize, end: usize, total: usize) -> String {
     let mut title = if total == 0 {
         "Commandstats".to_string()
@@ -1208,6 +1384,33 @@ fn bigkeys_title(
     title
 }
 
+fn hotkeys_title(
+    app: &AppState,
+    hotkeys: &crate::hotkeys::HotkeysMetrics,
+    visible_total: usize,
+    start: usize,
+    end: usize,
+) -> String {
+    let metric = hotkeys.selected_metric.map_or("?", HotkeysMetric::label);
+    let mut title = if visible_total == 0 {
+        format!("Hotkeys {metric}")
+    } else {
+        format!("Hotkeys {metric} {}-{} / {}", start + 1, end, visible_total)
+    };
+    if !app.hotkeys_view.filter.is_empty() {
+        let _ = write!(title, "  filter=/{}", app.hotkeys_view.filter);
+    }
+    if hotkeys.status == HotkeysStatus::Running
+        && let Some(remaining) = hotkeys.remaining_seconds()
+    {
+        let _ = write!(title, "  sampling={remaining}s");
+    }
+    if let Some(error) = &hotkeys.last_error {
+        let _ = write!(title, "  error={}", truncate_for_title(error, 40));
+    }
+    title
+}
+
 fn bigkeys_age_title(bigkeys: &crate::model::BigkeysMetrics) -> Option<Line<'static>> {
     if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running) {
         return None;
@@ -1232,6 +1435,28 @@ fn bigkeys_block(
 
     if let Some(age) = bigkeys_age_title(bigkeys) {
         block = block.title(age);
+    }
+
+    block
+}
+
+fn hotkeys_block(
+    app: &AppState,
+    hotkeys: &crate::hotkeys::HotkeysMetrics,
+    visible_total: usize,
+    start: usize,
+    end: usize,
+) -> Block<'static> {
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(hotkeys_title(app, hotkeys, visible_total, start, end))
+        .style(base_style(app));
+
+    if hotkeys.status != HotkeysStatus::Running
+        && let Some(instant) = hotkeys.last_completed
+    {
+        block = block
+            .title(Line::from(format!("age: {}s", instant.elapsed().as_secs())).right_aligned());
     }
 
     block
@@ -1280,6 +1505,60 @@ fn bigkeys_table<'a>(
         .style(base_style(app).add_modifier(Modifier::BOLD)),
     )
     .block(bigkeys_block(app, bigkeys, visible.len(), start, end))
+    .style(base_style(app))
+    .column_spacing(1)
+}
+
+fn hotkeys_table<'a>(
+    app: &'a AppState,
+    area_height: u16,
+    hotkeys: &'a crate::hotkeys::HotkeysMetrics,
+) -> Table<'a> {
+    let visible = app.visible_hotkeys(&hotkeys.entries);
+    let page_len = hotkeys_page_len(area_height);
+    let start = app
+        .hotkeys_view
+        .scroll_offset
+        .min(visible.len().saturating_sub(page_len.max(1)));
+    let end = (start + page_len).min(visible.len());
+    let total_value = hotkeys.total_value.unwrap_or(0);
+    let value_header = hotkeys
+        .selected_metric
+        .map_or("Value", HotkeysMetric::value_header);
+    let rows: Vec<Row<'a>> = visible[start..end]
+        .iter()
+        .map(|entry| {
+            let share = if total_value == 0 {
+                0.0
+            } else {
+                crate::column::u64_to_f64(entry.value) / crate::column::u64_to_f64(total_value)
+                    * 100.0
+            };
+            Row::new(vec![
+                Cell::from(entry.key.clone()),
+                Cell::from(Line::from(format_with_commas(entry.value)).right_aligned()),
+                Cell::from(Line::from(format!("{share:.2}%")).right_aligned()),
+            ])
+        })
+        .collect();
+
+    Table::new(
+        rows,
+        [
+            Constraint::Min(26),
+            Constraint::Length(18),
+            Constraint::Length(10),
+        ],
+    )
+    .header(
+        Row::new(vec![
+            Cell::from("Key"),
+            Cell::from(Line::from(value_header).right_aligned()),
+            Cell::from(Line::from("Share").right_aligned()),
+        ])
+        .style(base_style(app).add_modifier(Modifier::BOLD)),
+    )
+    .block(hotkeys_block(app, hotkeys, visible.len(), start, end))
     .style(base_style(app))
     .column_spacing(1)
 }
@@ -1546,6 +1825,8 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         format!("Commandstats Filter: /{}", app.commandstats_view.filter)
     } else if app.bigkeys_view.is_filtering {
         format!("Bigkeys Filter: /{}", app.bigkeys_view.filter)
+    } else if app.hotkeys_view.is_filtering {
+        format!("Hotkeys Filter: /{}", app.hotkeys_view.filter)
     } else if let Some(key) = app.selected_key() {
         app.instances
             .get(&key)
@@ -1587,15 +1868,22 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
         ("Tab/Right", "Next detail panel"),
         ("Left", "Previous detail panel"),
         (
-            "S / L / I / C / B",
-            "Jump to Summary, Latency, Info Raw, Commandstats, or Bigkeys in detail",
+            "S / L / I / C / B / H",
+            "Jump to Summary, Latency, Info Raw, Commandstats, Bigkeys, or Hotkeys in detail",
         ),
         (
             "Up/Down",
             "Move selection in overview or scroll detail panes with long content",
         ),
         ("?", "Toggle help overlay"),
-        ("r / R", "Refresh now, or rerun Bigkeys while on Bigkeys"),
+        (
+            "C / N",
+            "Start CPU or NET hotkeys sampling while on Hotkeys",
+        ),
+        (
+            "r / R",
+            "Refresh now, or rerun Bigkeys/Hotkeys while on those panes",
+        ),
         ("F3", "Start search input in overview"),
         (
             "F4",
@@ -1637,7 +1925,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nr or R refresh now (Bigkeys reruns scan)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/H jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -1972,6 +2260,7 @@ mod tests {
         assert_eq!(detail_tab_index_for_shortcut('i'), Some(2));
         assert_eq!(detail_tab_index_for_shortcut('C'), Some(3));
         assert_eq!(detail_tab_index_for_shortcut('b'), Some(4));
+        assert_eq!(detail_tab_index_for_shortcut('h'), Some(5));
         assert_eq!(detail_tab_index_for_shortcut('x'), None);
     }
 
@@ -2358,6 +2647,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("[L]atency")));
         assert!(lines.iter().any(|line| line.contains("[I]nfo Raw")));
         assert!(lines.iter().any(|line| line.contains("[C]ommandstats")));
+        assert!(lines.iter().any(|line| line.contains("[H]otkeys")));
 
         let line_index = lines
             .iter()
@@ -2703,6 +2993,86 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("No keys match the current filter"))
         );
+    }
+
+    #[test]
+    fn detail_hotkeys_tab_renders_idle_prompt() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 5;
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 18);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Start hotkeys sampling"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("[C] CPU") || line.contains("C] CPU"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("[N] NET") || line.contains("N] NET"))
+        );
+    }
+
+    #[test]
+    fn detail_hotkeys_tab_renders_table_and_filter() {
+        let mut app = crate::app::AppState::new(
+            default_settings(),
+            ColumnRegistry::load(None, true, crate::model::SortMode::Address),
+        );
+        app.active_view = crate::app::ActiveView::Detail;
+        app.detail_tab = 5;
+        app.hotkeys_view.filter = "alp".into();
+
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.last_updated = Some(std::time::Instant::now());
+        instance.detail.hotkeys.status = crate::hotkeys::HotkeysStatus::Ready;
+        instance.detail.hotkeys.selected_metric = Some(crate::hotkeys::HotkeysMetric::Cpu);
+        instance.detail.hotkeys.total_value = Some(100);
+        instance.detail.hotkeys.last_completed = Some(std::time::Instant::now());
+        instance.detail.hotkeys.entries = vec![
+            crate::hotkeys::HotkeyEntry {
+                key: "alpha".into(),
+                value: 50,
+            },
+            crate::hotkeys::HotkeyEntry {
+                key: "beta".into(),
+                value: 25,
+            },
+        ];
+        app.apply_update(instance);
+
+        let backend = TestBackend::new(100, 18);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("detail draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("Hotkeys CPU")));
+        assert!(lines.iter().any(|line| line.contains("filter=/alp")));
+        assert!(lines.iter().any(|line| line.contains("CPU us")));
+        assert!(lines.iter().any(|line| line.contains("50.00%")));
+        assert!(lines.iter().any(|line| line.contains("alpha")));
+        assert!(!lines.iter().any(|line| line.contains("beta")));
     }
 
     #[test]

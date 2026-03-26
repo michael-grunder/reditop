@@ -9,8 +9,9 @@
 - Overview screen with:
   - generic, configurable columns (INFO-backed + calculated)
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
-- Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, and an on-demand `bigkeys` view
-  including full server-reported error details when polling fails
+- Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, an on-demand `bigkeys`
+  view, and a timed `hotkeys` view for CPU/NET sampling, including full
+  server-reported error details when polling fails
 - Tree, flat, and primary-only overview modes
 - Sorting by currently visible column keys and substring filtering
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
@@ -35,14 +36,15 @@
 - `Enter`: open detail
 - `Esc`: quit from the overview, close the active overlay window, go back from detail/help, stop filter editing, or leave detail view and clear its active pane filters
 - `Tab` / `Left` / `Right`: cycle detail tabs
-- `S` / `L` / `I` / `C` / `B`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` in detail view
+- `S` / `L` / `I` / `C` / `B` / `h`: jump to `Summary` / `Latency` / `Info Raw` / `Commandstats` / `Bigkeys` / `Hotkeys` in detail view
 - `t`: cycle Tree / Flat / Primary
 - `s`: cycle sort column
 - `v`: open overview column picker
 - `Shift+Up/Down`: reorder columns inside the overview column picker
 - `h`: toggle host rendering (default auto-hides host when all targets share one host)
-- `/`: start filter input in overview, or filter the active detail pane in detail view (`Summary`, `Latency`, `Info Raw`, `Commandstats`, or `Bigkeys`)
-- `r` / `R`: refresh now, or rerun the on-demand `Bigkeys` scan while that tab is open
+- `/`: start filter input in overview, or filter the active detail pane in detail view (`Summary`, `Latency`, `Info Raw`, `Commandstats`, `Bigkeys`, or `Hotkeys`)
+- `C` / `N`: start CPU or NET sampling while the `Hotkeys` tab is open
+- `r` / `R`: refresh now, rerun the on-demand `Bigkeys` scan, or rerun `Hotkeys` sampling for the last selected metric while that tab is open
 
 The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace with
 `SCAN`, fetches each key's type, runs the matching cardinality/length command
@@ -53,6 +55,12 @@ normal polling, this scan is
 performed on demand when the `Bigkeys` tab is opened or refreshed. The header
 shows when a scan is in progress, and after completion it shows the result age
 in seconds.
+
+The `Hotkeys` detail tab uses Redis `HOTKEYS START ... DURATION 3` so sampling
+always stops automatically even if the TUI exits mid-run. The pane starts in an
+idle prompt where you can choose `CPU` or `NET` sampling, shows a live
+countdown while tracking is active, and then fetches `HOTKEYS GET` results into
+a filterable, scrollable table with per-key share percentages.
 
 ## CLI
 

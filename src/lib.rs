@@ -13,6 +13,7 @@ pub mod column;
 pub mod columns;
 pub mod config;
 pub mod discovery;
+pub mod hotkeys;
 pub mod model;
 pub mod overview;
 pub mod parse;

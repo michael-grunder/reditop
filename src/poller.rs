@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc};
 
+use crate::hotkeys::{HotkeysMetric, HotkeysStatus, parse_hotkeys_get};
 use crate::model::{
     BigkeyEntry, BigkeysMetrics, BigkeysScanStatus, ErrorDetails, InstanceState, InstanceType,
     RuntimeSettings, Status, Target, TargetProtocol,
@@ -14,14 +15,27 @@ use crate::target_addr::{canonical_host, strip_host};
 
 const BIGKEYS_SCAN_COUNT: usize = 256;
 const BIGKEYS_TOP_N: usize = 20;
+const HOTKEYS_TOP_N: usize = 20;
+const HOTKEYS_DURATION: Duration = Duration::from_secs(3);
+const HOTKEYS_GET_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const HOTKEYS_GET_MAX_ATTEMPTS: usize = 16;
 
 #[derive(Debug, Clone)]
 pub enum PollerRequest {
     RefreshAll,
     UpsertTarget(Target),
-    RefreshBigkeys { key: String, force: bool },
+    RefreshBigkeys {
+        key: String,
+        force: bool,
+    },
+    StartHotkeys {
+        key: String,
+        metric: HotkeysMetric,
+        force: bool,
+    },
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn start(
     targets: Vec<Target>,
     settings: RuntimeSettings,
@@ -109,6 +123,33 @@ pub fn start(
                     let updated = {
                         let _permit = semaphore.clone().acquire_owned().await.ok();
                         poll_bigkeys(target, &settings, prior).await
+                    };
+                    known_states.insert(updated.key.clone(), updated.clone());
+                    if update_tx.send(updated).await.is_err() {
+                        return;
+                    }
+                }
+                PollerRequest::StartHotkeys { key, metric, force } => {
+                    let Some(target) = target_map.get(&key) else {
+                        continue;
+                    };
+                    let Some(prior) = known_states.get(&key).cloned() else {
+                        continue;
+                    };
+                    if !force && prior.detail.hotkeys.status == HotkeysStatus::Running {
+                        continue;
+                    }
+
+                    let mut running = prior.clone();
+                    running.detail.hotkeys.start(metric, HOTKEYS_DURATION);
+                    if update_tx.send(running.clone()).await.is_err() {
+                        return;
+                    }
+                    known_states.insert(key.clone(), running);
+
+                    let updated = {
+                        let _permit = semaphore.clone().acquire_owned().await.ok();
+                        poll_hotkeys(target, &settings, prior, metric).await
                     };
                     known_states.insert(updated.key.clone(), updated.clone());
                     if update_tx.send(updated).await.is_err() {
@@ -278,6 +319,93 @@ async fn poll_bigkeys(
     state
 }
 
+async fn poll_hotkeys(
+    target: &Target,
+    settings: &RuntimeSettings,
+    mut state: InstanceState,
+    metric: HotkeysMetric,
+) -> InstanceState {
+    let client = match Client::open(redis_url(target)) {
+        Ok(client) => client,
+        Err(err) => {
+            apply_hotkeys_failure(&mut state, metric, err.to_string());
+            return state;
+        }
+    };
+
+    let config = AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(settings.connect_timeout))
+        .set_response_timeout(Some(settings.command_timeout));
+
+    let mut conn = match client
+        .get_multiplexed_async_connection_with_config(&config)
+        .await
+    {
+        Ok(conn) => conn,
+        Err(err) => {
+            let (_, details) = classify_error(&err);
+            apply_hotkeys_failure(&mut state, metric, details.message);
+            return state;
+        }
+    };
+
+    let start_result = redis::cmd("HOTKEYS")
+        .arg("START")
+        .arg("METRICS")
+        .arg(1)
+        .arg(metric.redis_arg())
+        .arg("COUNT")
+        .arg(HOTKEYS_TOP_N)
+        .arg("DURATION")
+        .arg(HOTKEYS_DURATION.as_secs())
+        .query_async::<String>(&mut conn)
+        .await;
+    if let Err(err) = start_result {
+        apply_hotkeys_failure(&mut state, metric, err.to_string());
+        return state;
+    }
+
+    tokio::time::sleep(HOTKEYS_DURATION).await;
+
+    for _ in 0..HOTKEYS_GET_MAX_ATTEMPTS {
+        match redis::cmd("HOTKEYS")
+            .arg("GET")
+            .query_async::<Value>(&mut conn)
+            .await
+        {
+            Ok(value) => match parse_hotkeys_get(&value, metric) {
+                Ok(mut hotkeys) if hotkeys.tracking_active => {
+                    hotkeys.started_at = state.detail.hotkeys.started_at;
+                    hotkeys.finishes_at = state.detail.hotkeys.finishes_at;
+                    state.detail.hotkeys = hotkeys;
+                    tokio::time::sleep(HOTKEYS_GET_POLL_INTERVAL).await;
+                }
+                Ok(mut hotkeys) => {
+                    hotkeys.started_at = state.detail.hotkeys.started_at;
+                    hotkeys.finishes_at = state.detail.hotkeys.finishes_at;
+                    state.detail.hotkeys = hotkeys;
+                    return state;
+                }
+                Err(err) => {
+                    apply_hotkeys_failure(&mut state, metric, err);
+                    return state;
+                }
+            },
+            Err(err) => {
+                apply_hotkeys_failure(&mut state, metric, err.to_string());
+                return state;
+            }
+        }
+    }
+
+    apply_hotkeys_failure(
+        &mut state,
+        metric,
+        "HOTKEYS GET did not finish after sampling duration".to_string(),
+    );
+    state
+}
+
 async fn prepare_bigkeys_connection(
     conn: &mut impl redis::aio::ConnectionLike,
     state: &InstanceState,
@@ -374,6 +502,15 @@ fn apply_bigkeys_failure(state: &mut InstanceState, message: String) {
     state.detail.bigkeys.status = BigkeysScanStatus::Failed;
     state.detail.bigkeys.last_error = Some(truncate_string(message, 120));
     state.detail.bigkeys.last_completed = Some(Instant::now());
+}
+
+fn apply_hotkeys_failure(state: &mut InstanceState, metric: HotkeysMetric, message: String) {
+    state.detail.hotkeys.status = HotkeysStatus::Failed;
+    state.detail.hotkeys.last_error = Some(truncate_string(message, 120));
+    state.detail.hotkeys.selected_metric = Some(metric);
+    state.detail.hotkeys.tracking_active = false;
+    state.detail.hotkeys.finishes_at = None;
+    state.detail.hotkeys.last_completed = Some(Instant::now());
 }
 
 fn bigkeys_requires_readonly(state: &InstanceState) -> bool {

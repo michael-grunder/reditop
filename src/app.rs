@@ -53,6 +53,7 @@ pub struct DetailPaneState {
 
 pub type CommandstatsViewState = DetailPaneState;
 pub type BigkeysViewState = DetailPaneState;
+pub type HotkeysViewState = DetailPaneState;
 pub type DetailTextViewState = DetailPaneState;
 
 #[allow(clippy::struct_excessive_bools)]
@@ -78,6 +79,7 @@ pub struct AppState {
     pub info_raw_view: DetailTextViewState,
     pub commandstats_view: CommandstatsViewState,
     pub bigkeys_view: BigkeysViewState,
+    pub hotkeys_view: HotkeysViewState,
     pub force_show_host: bool,
     pub instances: HashMap<String, InstanceState>,
     pub discovery_status: DiscoveryStatus,
@@ -119,6 +121,7 @@ impl AppState {
             info_raw_view: DetailTextViewState::default(),
             commandstats_view: CommandstatsViewState::default(),
             bigkeys_view: BigkeysViewState::default(),
+            hotkeys_view: HotkeysViewState::default(),
             force_show_host: false,
             instances: HashMap::new(),
             discovery_status: DiscoveryStatus::default(),
@@ -345,6 +348,7 @@ impl AppState {
             2 => Some(&self.info_raw_view),
             3 => Some(&self.commandstats_view),
             4 => Some(&self.bigkeys_view),
+            5 => Some(&self.hotkeys_view),
             _ => None,
         }
     }
@@ -359,6 +363,7 @@ impl AppState {
             2 => Some(&mut self.info_raw_view),
             3 => Some(&mut self.commandstats_view),
             4 => Some(&mut self.bigkeys_view),
+            5 => Some(&mut self.hotkeys_view),
             _ => None,
         }
     }
@@ -376,7 +381,7 @@ impl AppState {
     }
 
     pub fn clear_detail_filters(&mut self) {
-        for detail_tab in 0..=4 {
+        for detail_tab in 0..=5 {
             if let Some(view) = self.detail_pane_view_mut(detail_tab) {
                 view.filter.clear();
                 view.is_filtering = false;
@@ -412,6 +417,32 @@ impl AppState {
                     || entry.key.to_ascii_lowercase().contains(&needle)
                     || entry.key_type.to_ascii_lowercase().contains(&needle)
             })
+            .collect()
+    }
+
+    pub fn clamp_hotkeys_scroll(&mut self, rows_len: usize, page_len: usize) {
+        let max_offset = rows_len.saturating_sub(page_len.max(1));
+        if self.hotkeys_view.scroll_offset > max_offset {
+            self.hotkeys_view.scroll_offset = max_offset;
+        }
+    }
+
+    pub fn move_hotkeys_scroll(&mut self, delta: isize, rows_len: usize, page_len: usize) {
+        let max_offset = rows_len.saturating_sub(page_len.max(1));
+        let current = isize::try_from(self.hotkeys_view.scroll_offset).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(max_offset).unwrap_or(isize::MAX);
+        let next = (current + delta).clamp(0, max_index);
+        self.hotkeys_view.scroll_offset = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub fn visible_hotkeys<'a>(
+        &self,
+        entries: &'a [crate::hotkeys::HotkeyEntry],
+    ) -> Vec<&'a crate::hotkeys::HotkeyEntry> {
+        let needle = self.hotkeys_view.filter.trim().to_ascii_lowercase();
+        entries
+            .iter()
+            .filter(|entry| needle.is_empty() || entry.key.to_ascii_lowercase().contains(&needle))
             .collect()
     }
 
@@ -1794,6 +1825,12 @@ mod tests {
         app.start_active_detail_filter_input(false);
         assert!(app.bigkeys_view.is_filtering);
         assert_eq!(app.bigkeys_view.filter, "session");
+
+        app.detail_tab = 5;
+        app.hotkeys_view.filter = "alpha".to_string();
+        app.start_active_detail_filter_input(false);
+        assert!(app.hotkeys_view.is_filtering);
+        assert_eq!(app.hotkeys_view.filter, "alpha");
     }
 
     #[test]
@@ -1809,11 +1846,14 @@ mod tests {
         app.bigkeys_view.filter = "key".to_string();
         app.bigkeys_view.is_filtering = true;
         app.bigkeys_view.scroll_offset = 3;
+        app.hotkeys_view.filter = "hot".to_string();
+        app.hotkeys_view.is_filtering = true;
+        app.hotkeys_view.scroll_offset = 4;
 
         app.close_detail_view();
 
         assert_eq!(app.active_view, ActiveView::Overview);
-        for detail_tab in 0..=4 {
+        for detail_tab in 0..=5 {
             let view = app
                 .detail_pane_view(detail_tab)
                 .expect("detail pane should exist");
@@ -1821,5 +1861,26 @@ mod tests {
             assert!(!view.is_filtering);
             assert_eq!(view.scroll_offset, 0);
         }
+    }
+
+    #[test]
+    fn visible_hotkeys_filters_by_key() {
+        let mut app = app();
+        let entries = vec![
+            crate::hotkeys::HotkeyEntry {
+                key: "alpha".to_string(),
+                value: 10,
+            },
+            crate::hotkeys::HotkeyEntry {
+                key: "beta".to_string(),
+                value: 5,
+            },
+        ];
+
+        app.hotkeys_view.filter = "alp".to_string();
+        let visible = app.visible_hotkeys(&entries);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].key, "alpha");
     }
 }

@@ -1,7 +1,9 @@
 use std::env;
 use std::time::Duration;
 
+use redis::AsyncCommands;
 use reditop::cluster::discover_cluster_targets;
+use reditop::hotkeys::{HotkeysMetric, HotkeysStatus};
 use reditop::model::{
     BigkeysScanStatus, RuntimeSettings, SortMode, Target, TargetProtocol, UiTheme, ViewMode,
 };
@@ -61,6 +63,22 @@ async fn recv_state(
 
 fn skip_unreachable(label: &str, err: &str) {
     eprintln!("skipping {label} integration test: {err}");
+}
+
+fn redis_url_for_target(target: &Target) -> String {
+    format!("redis://{}/", target.addr)
+}
+
+async fn generate_hotkeys_traffic(target: &Target) -> redis::RedisResult<()> {
+    let client = redis::Client::open(redis_url_for_target(target))?;
+    let mut conn = client.get_multiplexed_async_connection().await?;
+    for idx in 0..250 {
+        let key = format!("reditop:hotkeys:{idx}");
+        let value = format!("value-{idx}");
+        let _: () = conn.set(&key, &value).await?;
+        let _: String = conn.get(&key).await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -137,4 +155,62 @@ async fn cluster_discovery_and_bigkeys_scan_work_against_live_cluster() {
         scanned.detail.bigkeys.last_error
     );
     assert!(scanned.detail.bigkeys.last_error.is_none());
+}
+
+#[tokio::test]
+async fn standalone_hotkeys_sampling_works_against_live_redis() {
+    let target = standalone_target();
+    let settings = runtime_settings();
+    let (mut update_rx, request_tx) = start(vec![target.clone()], settings);
+
+    let state = recv_state(&mut update_rx, &target.addr).await;
+    if state.status != reditop::model::Status::Ok {
+        skip_unreachable(
+            "standalone redis",
+            state.last_error.as_deref().unwrap_or("poll failed"),
+        );
+        return;
+    }
+
+    for metric in [HotkeysMetric::Cpu, HotkeysMetric::Net] {
+        request_tx
+            .send(PollerRequest::StartHotkeys {
+                key: target.addr.clone(),
+                metric,
+                force: true,
+            })
+            .await
+            .expect("failed to request hotkeys sampling");
+
+        let running = recv_state(&mut update_rx, &target.addr).await;
+        assert_eq!(running.detail.hotkeys.status, HotkeysStatus::Running);
+        assert_eq!(running.detail.hotkeys.selected_metric, Some(metric));
+
+        if let Err(err) = generate_hotkeys_traffic(&target).await {
+            skip_unreachable("hotkeys traffic generation", &err.to_string());
+            return;
+        }
+
+        let sampled = recv_state(&mut update_rx, &target.addr).await;
+        if sampled.detail.hotkeys.status == HotkeysStatus::Failed {
+            let error = sampled
+                .detail
+                .hotkeys
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "unknown hotkeys error".to_string());
+            if error.to_ascii_lowercase().contains("unknown command")
+                || error.to_ascii_lowercase().contains("hotkeys")
+            {
+                skip_unreachable("standalone hotkeys", &error);
+                return;
+            }
+            panic!("hotkeys sampling failed: {error}");
+        }
+
+        assert_eq!(sampled.detail.hotkeys.status, HotkeysStatus::Ready);
+        assert_eq!(sampled.detail.hotkeys.selected_metric, Some(metric));
+        assert!(!sampled.detail.hotkeys.tracking_active);
+        assert!(sampled.detail.hotkeys.last_error.is_none());
+    }
 }
