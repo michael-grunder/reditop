@@ -16,7 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
 use crate::app::{ActiveView, AppState, FilterPromptMode, OverviewModal};
 use crate::cli::{LaunchConfig, OutputMode};
@@ -1064,11 +1064,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(5),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
         .split(area);
 
     let title = format!(
@@ -1100,14 +1096,12 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         chunks[0],
     );
 
-    frame.render_widget(detail_tabs_widget(app), chunks[1]);
-
     match app.detail_tab {
         0 => {
             draw_detail_text(
                 frame,
                 app,
-                chunks[2],
+                chunks[1],
                 0,
                 "Summary",
                 &detail_text_body(instance, 0),
@@ -1117,7 +1111,7 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
             draw_detail_text(
                 frame,
                 app,
-                chunks[2],
+                chunks[1],
                 1,
                 "Latency",
                 &detail_text_body(instance, 1),
@@ -1126,14 +1120,14 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         2 => draw_detail_text(
             frame,
             app,
-            chunks[2],
+            chunks[1],
             2,
             "Info Raw",
             &detail_text_body(instance, 2),
         ),
-        3 => draw_commandstats(frame, app, chunks[2], &instance.detail.commandstats),
-        4 => draw_bigkeys(frame, app, chunks[2], &instance.detail.bigkeys),
-        _ => draw_hotkeys(frame, app, chunks[2], &instance.detail.hotkeys),
+        3 => draw_commandstats(frame, app, chunks[1], &instance.detail.commandstats),
+        4 => draw_bigkeys(frame, app, chunks[1], &instance.detail.bigkeys),
+        _ => draw_hotkeys(frame, app, chunks[1], &instance.detail.hotkeys),
     }
 }
 
@@ -1142,8 +1136,9 @@ fn detail_tab_index_for_shortcut(ch: char) -> Option<usize> {
     DETAIL_TABS.iter().position(|tab| tab.shortcut == shortcut)
 }
 
-fn detail_tabs_widget(app: &AppState) -> Tabs<'static> {
-    Tabs::new(DETAIL_TABS.iter().map(detail_tab_label))
+#[cfg(test)]
+fn detail_tabs_widget(app: &AppState) -> ratatui::widgets::Tabs<'static> {
+    ratatui::widgets::Tabs::new(DETAIL_TABS.iter().map(detail_tab_label))
         .style(base_style(app))
         .block(
             Block::default()
@@ -1873,6 +1868,17 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
     };
     frame.render_widget(Paragraph::new(prompt).style(base_style(app)), lines[0]);
 
+    frame.render_widget(
+        Paragraph::new(status_bar_actions(app)).style(base_style(app).add_modifier(Modifier::BOLD)),
+        lines[1],
+    );
+}
+
+fn status_bar_actions(app: &AppState) -> Line<'static> {
+    if app.active_view == ActiveView::Detail {
+        return detail_footer_actions(app);
+    }
+
     let footer_actions = format!(
         "F1Help  F3Search  F4Filter  F5{}  F6SortBy  F7Columns",
         app.view_mode.footer_label()
@@ -1881,10 +1887,28 @@ fn draw_status_bar(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect) {
         || footer_actions.clone(),
         |summary| format!("{summary}  |  {footer_actions}"),
     );
-    frame.render_widget(
-        Paragraph::new(footer).style(base_style(app).add_modifier(Modifier::BOLD)),
-        lines[1],
-    );
+    Line::from(footer)
+}
+
+fn detail_footer_actions(app: &AppState) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (idx, tab) in DETAIL_TABS.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::raw("  "));
+            spans.push(Span::raw("│"));
+            spans.push(Span::raw("  "));
+        }
+        let style = if idx == app.detail_tab {
+            Style::default()
+                .fg(background_color(app))
+                .bg(carat_color(app))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            base_style(app).add_modifier(Modifier::BOLD)
+        };
+        spans.extend(detail_tab_label(tab).spans.into_iter().map(|span| span.style(style)));
+    }
+    Line::from(spans)
 }
 
 const fn help_bindings() -> &'static [(&'static str, &'static str)] {
@@ -2667,6 +2691,27 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_shows_detail_tabs_in_detail_view() {
+        let mut app = crate::app::AppState::new(default_settings(), test_registry());
+        app.active_view = ActiveView::Detail;
+        app.detail_tab = 4;
+
+        let backend = TestBackend::new(100, 2);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_status_bar(frame, &app, frame.area()))
+            .expect("status bar draw succeeds");
+
+        let lines = buffer_lines(terminal.backend().buffer());
+        assert!(lines.iter().any(|line| line.contains("[S]ummary")));
+        assert!(lines.iter().any(|line| line.contains("[L]atency")));
+        assert!(lines.iter().any(|line| line.contains("[I]nfo Raw")));
+        assert!(lines.iter().any(|line| line.contains("[C]ommandstats")));
+        assert!(lines.iter().any(|line| line.contains("[B]igkeys")));
+        assert!(lines.iter().any(|line| line.contains("Hot[k]eys")));
+    }
+
+    #[test]
     fn detail_tabs_render_shortcuts_and_highlight_selected_tab() {
         let mut app = crate::app::AppState::new(
             default_settings(),
@@ -2821,7 +2866,7 @@ mod tests {
             .expect("detail draw succeeds");
 
         let lines = buffer_lines(terminal.backend().buffer());
-        assert!(lines.iter().any(|line| line.contains("Summary 3-6 / 14")));
+        assert!(lines.iter().any(|line| line.contains("Summary 3-9 / 14")));
         assert!(!lines.iter().any(|line| line.contains("status           :")));
         assert!(!lines.iter().any(|line| line.contains("used_memory      :")));
         assert!(lines.iter().any(|line| line.contains("used_memory_rss")));
@@ -2901,13 +2946,13 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Commandstats 3-6 / 8"))
+                .any(|line| line.contains("Commandstats 2-8 / 8"))
         );
         assert!(!lines.iter().any(|line| line.contains("cmd0")));
-        assert!(!lines.iter().any(|line| line.contains("cmd1")));
+        assert!(lines.iter().any(|line| line.contains("cmd1")));
         assert!(lines.iter().any(|line| line.contains("cmd2")));
         assert!(lines.iter().any(|line| line.contains("cmd5")));
-        assert!(!lines.iter().any(|line| line.contains("cmd6")));
+        assert!(lines.iter().any(|line| line.contains("cmd7")));
         assert_eq!(commandstats_page_len(10), 4);
     }
 

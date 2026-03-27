@@ -25,6 +25,8 @@
 
 ### Changed
 
+- Move the detail-pane tab shortcuts into the contextual footer while a detail
+  view is open, freeing the old tab-strip space for more pane content.
 - Change the `Hotkeys` detail pane shortcut to `K`, extend its default sampling
   duration to 60 seconds, and show rerun/reset affordances after a sample
   completes.
