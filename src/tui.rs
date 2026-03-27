@@ -676,6 +676,7 @@ fn start_hotkeys_sampling(
         return;
     };
 
+    app.clear_hotkeys_local_reset(&key);
     if let Some(instance) = app.instances.get_mut(&key) {
         instance
             .detail
@@ -703,9 +704,7 @@ fn handle_hotkeys_stop_or_reset(
         return;
     }
 
-    if let Some(instance) = app.instances.get_mut(&key) {
-        instance.detail.hotkeys.reset();
-    }
+    app.reset_hotkeys_locally(&key);
     sync_hotkeys_view(app, 0);
 }
 

@@ -58,6 +58,9 @@
 
 ### Fixed
 
+- Keep a locally reset `Hotkeys` pane on its idle prompt after `X`, instead of
+  letting later refresh frames resurrect the previously sampled results until a
+  new `C`/`N` run is started.
 - Allow `Hotkeys` sampling to stop early with `X` by issuing `HOTKEYS STOP`
   before fetching results, instead of forcing the full default duration every
   time.

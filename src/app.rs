@@ -87,6 +87,7 @@ pub struct AppState {
     pub column_registry: ColumnRegistry,
     pub runtime_overview_column_order: Vec<String>,
     pub runtime_visible_overview: Vec<String>,
+    hotkeys_locally_reset: HashSet<String>,
     pending_transient_emphasis: HashMap<String, String>,
     transient_emphasis_records: HashMap<String, SortKey>,
 }
@@ -128,17 +129,34 @@ impl AppState {
             should_quit: false,
             runtime_overview_column_order: column_registry.available_overview_columns(),
             runtime_visible_overview: column_registry.default_visible_overview_columns(),
+            hotkeys_locally_reset: HashSet::new(),
             column_registry,
             pending_transient_emphasis: HashMap::new(),
             transient_emphasis_records: HashMap::new(),
         }
     }
 
-    pub fn apply_update(&mut self, update: InstanceState) {
+    pub fn apply_update(&mut self, mut update: InstanceState) {
         let key = update.key.clone();
+        if self.hotkeys_locally_reset.contains(&key)
+            && update.detail.hotkeys.status != crate::hotkeys::HotkeysStatus::Running
+        {
+            update.detail.hotkeys.reset();
+        }
         self.instances.insert(key.clone(), update);
         self.track_transient_emphasis(&key);
         self.clamp_selection();
+    }
+
+    pub fn reset_hotkeys_locally(&mut self, key: &str) {
+        self.hotkeys_locally_reset.insert(key.to_string());
+        if let Some(instance) = self.instances.get_mut(key) {
+            instance.detail.hotkeys.reset();
+        }
+    }
+
+    pub fn clear_hotkeys_local_reset(&mut self, key: &str) {
+        self.hotkeys_locally_reset.remove(key);
     }
 
     pub fn apply_discovery_event(&mut self, event: &DiscoveryEvent) {
@@ -1141,6 +1159,7 @@ const fn root_kind_rank(kind: InstanceType) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{ActiveView, AppState, FilterPromptMode};
+    use crate::hotkeys::{HotkeysMetric, HotkeysStatus};
     use crate::model::{
         CommandStat, InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode,
         UiTheme, ViewMode,
@@ -1882,5 +1901,63 @@ mod tests {
 
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].key, "alpha");
+    }
+
+    #[test]
+    fn local_hotkeys_reset_masks_non_running_updates() {
+        let mut app = app();
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.detail.hotkeys.status = HotkeysStatus::Ready;
+        instance.detail.hotkeys.selected_metric = Some(HotkeysMetric::Cpu);
+        instance.detail.hotkeys.total_value = Some(42);
+        instance.detail.hotkeys.entries = vec![crate::hotkeys::HotkeyEntry {
+            key: "alpha".to_string(),
+            value: 42,
+        }];
+        app.apply_update(instance.clone());
+
+        app.reset_hotkeys_locally("a");
+
+        let mut stale_update = instance;
+        stale_update.detail.hotkeys.last_error = Some("stale".to_string());
+        app.apply_update(stale_update);
+
+        let hotkeys = &app
+            .instances
+            .get("a")
+            .expect("instance should exist")
+            .detail
+            .hotkeys;
+        assert_eq!(hotkeys.status, HotkeysStatus::Idle);
+        assert!(hotkeys.selected_metric.is_none());
+        assert!(hotkeys.entries.is_empty());
+    }
+
+    #[test]
+    fn clearing_local_hotkeys_reset_allows_new_updates() {
+        let mut app = app();
+        let mut instance = InstanceState::new("a".into(), "127.0.0.1:6379".into());
+        instance.detail.hotkeys.status = HotkeysStatus::Ready;
+        instance.detail.hotkeys.selected_metric = Some(HotkeysMetric::Cpu);
+        app.apply_update(instance.clone());
+
+        app.reset_hotkeys_locally("a");
+        app.clear_hotkeys_local_reset("a");
+
+        let mut running_update = instance;
+        running_update
+            .detail
+            .hotkeys
+            .start(HotkeysMetric::Net, Duration::from_secs(60));
+        app.apply_update(running_update);
+
+        let hotkeys = &app
+            .instances
+            .get("a")
+            .expect("instance should exist")
+            .detail
+            .hotkeys;
+        assert_eq!(hotkeys.status, HotkeysStatus::Running);
+        assert_eq!(hotkeys.selected_metric, Some(HotkeysMetric::Net));
     }
 }
