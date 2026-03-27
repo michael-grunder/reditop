@@ -1307,12 +1307,11 @@ fn draw_hotkeys(
 
     if hotkeys.status == HotkeysStatus::Idle {
         frame.render_widget(
-            Paragraph::new(
-                "Start hotkeys sampling:\n\n[C] CPU\n[N] NET\n\nSampling runs for 60 seconds by default.\nPress [X] to stop early once sampling is running.",
-            )
-            .style(base_style(app))
-            .block(block)
-            .wrap(Wrap { trim: false }),
+            Paragraph::new("Start sampling (60 seconds)\n\n[C] CPU [N] NET")
+                .style(base_style(app))
+                .block(block)
+                .alignment(ratatui::layout::Alignment::Center)
+                .wrap(Wrap { trim: false }),
             area,
         );
         return;
@@ -1906,7 +1905,12 @@ fn detail_footer_actions(app: &AppState) -> Line<'static> {
         } else {
             base_style(app).add_modifier(Modifier::BOLD)
         };
-        spans.extend(detail_tab_label(tab).spans.into_iter().map(|span| span.style(style)));
+        spans.extend(
+            detail_tab_label(tab)
+                .spans
+                .into_iter()
+                .map(|span| span.style(style)),
+        );
     }
     Line::from(spans)
 }
@@ -3103,20 +3107,14 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Start hotkeys sampling"))
+                .any(|line| line.contains("Start sampling (60 seconds)"))
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("[C] CPU") || line.contains("C] CPU"))
+                .any(|line| line.contains("[C] CPU [N] NET") || line.contains("C] CPU [N] NET"))
         );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("[N] NET") || line.contains("N] NET"))
-        );
-        assert!(lines.iter().any(|line| line.contains("60 seconds")));
-        assert!(lines.iter().any(|line| line.contains("[X]")));
+        assert!(!lines.iter().any(|line| line.contains("[X]")));
     }
 
     #[test]

@@ -27,6 +27,9 @@
 
 - Move the detail-pane tab shortcuts into the contextual footer while a detail
   view is open, freeing the old tab-strip space for more pane content.
+- Center the idle `Hotkeys` prompt and simplify it to `Start sampling (60
+  seconds)` with inline `CPU` / `NET` choices, matching the active sampling
+  view's more concise layout.
 - Change the `Hotkeys` detail pane shortcut to `K`, extend its default sampling
   duration to 60 seconds, and show rerun/reset affordances after a sample
   completes.
