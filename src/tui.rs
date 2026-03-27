@@ -13,7 +13,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Tabs, Wrap};
@@ -1324,10 +1324,12 @@ fn draw_hotkeys(
     }
 
     if hotkeys.status == HotkeysStatus::Running {
+        let remaining = hotkeys.remaining_seconds().unwrap_or(0);
         frame.render_widget(
-            Paragraph::new("Sampling hotkeys...")
+            Paragraph::new(format!("\n\nSampling {remaining}s\nPress [X] to stop"))
                 .style(base_style(app))
-                .block(block),
+                .block(block)
+                .alignment(ratatui::layout::Alignment::Center),
             area,
         );
         return;
@@ -1433,20 +1435,6 @@ fn hotkeys_title(
     title
 }
 
-fn hotkeys_sampling_title(hotkeys: &crate::hotkeys::HotkeysMetrics) -> Option<Line<'static>> {
-    if hotkeys.status != HotkeysStatus::Running {
-        return None;
-    }
-
-    let remaining = hotkeys.remaining_seconds().unwrap_or(0);
-    Some(
-        Line::from(format!(
-            "Time remaining: {remaining}s  Press [X] to stop early and fetch results now."
-        ))
-        .alignment(Alignment::Center),
-    )
-}
-
 fn bigkeys_age_title(bigkeys: &crate::model::BigkeysMetrics) -> Option<Line<'static>> {
     if matches!(bigkeys.status, crate::model::BigkeysScanStatus::Running) {
         return None;
@@ -1488,9 +1476,7 @@ fn hotkeys_block(
         .title(hotkeys_title(app, hotkeys, visible_total, start, end))
         .style(base_style(app));
 
-    if let Some(sampling_title) = hotkeys_sampling_title(hotkeys) {
-        block = block.title(sampling_title);
-    } else if let Some(instant) = hotkeys.last_completed {
+    if let Some(instant) = hotkeys.last_completed {
         block = block
             .title(Line::from(format!("age: {}s", instant.elapsed().as_secs())).right_aligned());
     }
@@ -3132,7 +3118,7 @@ mod tests {
     }
 
     #[test]
-    fn detail_hotkeys_sampling_moves_status_into_header() {
+    fn detail_hotkeys_sampling_renders_concise_body() {
         let mut app = crate::app::AppState::new(
             default_settings(),
             ColumnRegistry::load(None, true, crate::model::SortMode::Address),
@@ -3161,22 +3147,18 @@ mod tests {
 
         let lines = buffer_lines(terminal.backend().buffer());
         assert!(lines.iter().any(|line| line.contains("Hotkeys CPU")));
+        assert!(lines.iter().any(|line| line.contains("Sampling 49s")));
+        assert!(lines.iter().any(|line| line.contains("Press [X] to stop")));
         assert!(
-            lines
+            !lines
                 .iter()
                 .any(|line| line.contains("Time remaining: 49s"))
         );
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Press [X] to stop early"))
-        );
-        assert!(
-            lines
+            !lines
                 .iter()
                 .any(|line| line.contains("Sampling hotkeys..."))
         );
-        assert!(!lines.iter().any(|line| line.contains("sampling=49s")));
     }
 
     #[test]
