@@ -20,6 +20,7 @@ These are mandatory completion steps, not optional guidance.
 
 * Run `cargo test`.
 * Run `cargo clippy` and address the reported issues.
+* Run `cargo fmt` and address the reported issues.
 * Add or update tests when the change affects behavior.
 * Update `README.md` when user-facing behavior or documented workflows change.
 * Update `CHANGELOG.md` under `## Unreleased`.
