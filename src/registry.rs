@@ -571,6 +571,7 @@ mod tests {
             vec![
                 "alias".to_string(),
                 "addr".to_string(),
+                "pid".to_string(),
                 "role".to_string(),
                 "cluster".to_string(),
                 "connected_clients".to_string(),

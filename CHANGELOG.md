@@ -64,6 +64,9 @@
 
 ### Fixed
 
+- Fix stale test fixtures after the `process_id`, `leave_killed_servers`, and
+  boxed poller update model changes so `cargo test` and `cargo clippy` pass
+  again.
 - Keep a locally reset `Hotkeys` pane on its idle prompt after `X`, instead of
   letting later refresh frames resurrect the previously sampled results until a
   new `C`/`N` run is started.

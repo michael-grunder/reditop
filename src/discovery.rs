@@ -1045,6 +1045,7 @@ mod tests {
                 source: CandidateSource::CuratedPorts,
                 username: None,
                 password: None,
+                process_id: None,
             },
             CandidateEndpoint {
                 host: "127.0.0.1".to_string(),
@@ -1052,6 +1053,7 @@ mod tests {
                 source: CandidateSource::SeedTarget,
                 username: Some("alice".to_string()),
                 password: Some("secret".to_string()),
+                process_id: None,
             },
         ]);
 
@@ -1069,6 +1071,7 @@ mod tests {
             username: Some("alice".to_string()),
             password: Some("secret".to_string()),
             tags: Vec::new(),
+            process_id: None,
         }];
 
         let mapped = credential_map(&targets);
@@ -1104,6 +1107,7 @@ mod tests {
             source: CandidateSource::SeedTarget,
             username: None,
             password: None,
+            process_id: None,
         };
 
         let candidates = replication_candidates(&info, &seed);
@@ -1118,6 +1122,7 @@ mod tests {
             source: CandidateSource::CuratedPorts,
             username: None,
             password: None,
+            process_id: None,
         };
         let mut status = DiscoveryStatus::default();
         status.apply_event(&DiscoveryEvent::CandidateFound(candidate.clone()));

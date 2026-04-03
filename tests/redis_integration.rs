@@ -7,7 +7,7 @@ use reditop::hotkeys::{HotkeysMetric, HotkeysStatus};
 use reditop::model::{
     BigkeysScanStatus, RuntimeSettings, SortMode, Target, TargetProtocol, UiTheme, ViewMode,
 };
-use reditop::poller::{PollerRequest, start};
+use reditop::poller::{PollerRequest, PollerUpdate, start};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -17,6 +17,7 @@ fn runtime_settings() -> RuntimeSettings {
         connect_timeout: Duration::from_millis(300),
         command_timeout: Duration::from_secs(2),
         concurrency_limit: 2,
+        leave_killed_servers: false,
         default_view: ViewMode::Flat,
         default_sort: SortMode::Address,
         ui_theme: UiTheme::default(),
@@ -31,6 +32,7 @@ fn standalone_target() -> Target {
         username: None,
         password: None,
         tags: Vec::new(),
+        process_id: None,
     }
 }
 
@@ -43,20 +45,22 @@ fn cluster_target() -> Target {
         username: None,
         password: None,
         tags: Vec::new(),
+        process_id: None,
     }
 }
 
 async fn recv_state(
-    update_rx: &mut mpsc::Receiver<reditop::model::InstanceState>,
+    update_rx: &mut mpsc::Receiver<PollerUpdate>,
     key: &str,
 ) -> reditop::model::InstanceState {
     loop {
-        let state = timeout(Duration::from_secs(5), update_rx.recv())
+        let update = timeout(Duration::from_secs(5), update_rx.recv())
             .await
             .expect("timed out waiting for poller update")
             .expect("poller update channel closed unexpectedly");
-        if state.key == key {
-            return state;
+        match update {
+            PollerUpdate::State(state) if state.key == key => return *state,
+            PollerUpdate::State(_) | PollerUpdate::Remove { .. } => {}
         }
     }
 }

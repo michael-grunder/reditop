@@ -48,7 +48,7 @@ pub enum PollerRequest {
 
 #[derive(Debug, Clone)]
 pub enum PollerUpdate {
-    State(InstanceState),
+    State(Box<InstanceState>),
     Remove { key: String },
 }
 
@@ -83,7 +83,11 @@ pub fn start(
                         task.handle.abort();
                     }
                     known_states.insert(update.key.clone(), update.clone());
-                    if update_tx.send(PollerUpdate::State(update)).await.is_err() {
+                    if update_tx
+                        .send(PollerUpdate::State(Box::new(update)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                     continue;
@@ -108,7 +112,11 @@ pub fn start(
 
                     for state in refreshed {
                         known_states.insert(state.key.clone(), state.clone());
-                        if update_tx.send(PollerUpdate::State(state)).await.is_err() {
+                        if update_tx
+                            .send(PollerUpdate::State(Box::new(state)))
+                            .await
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -126,7 +134,11 @@ pub fn start(
                         poll_one(&target, &settings, prior).await
                     };
                     known_states.insert(updated.key.clone(), updated.clone());
-                    if update_tx.send(PollerUpdate::State(updated)).await.is_err() {
+                    if update_tx
+                        .send(PollerUpdate::State(Box::new(updated)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -150,7 +162,7 @@ pub fn start(
                     running.detail.bigkeys.status = BigkeysScanStatus::Running;
                     running.detail.bigkeys.last_error = None;
                     if update_tx
-                        .send(PollerUpdate::State(running.clone()))
+                        .send(PollerUpdate::State(Box::new(running.clone())))
                         .await
                         .is_err()
                     {
@@ -163,7 +175,11 @@ pub fn start(
                         poll_bigkeys(target, &settings, prior).await
                     };
                     known_states.insert(updated.key.clone(), updated.clone());
-                    if update_tx.send(PollerUpdate::State(updated)).await.is_err() {
+                    if update_tx
+                        .send(PollerUpdate::State(Box::new(updated)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -181,7 +197,7 @@ pub fn start(
                     let mut running = prior.clone();
                     running.detail.hotkeys.start(metric, HOTKEYS_DURATION);
                     if update_tx
-                        .send(PollerUpdate::State(running.clone()))
+                        .send(PollerUpdate::State(Box::new(running.clone())))
                         .await
                         .is_err()
                     {
@@ -232,7 +248,7 @@ pub fn start(
                     };
                     match updated {
                         PollerUpdate::State(state) => {
-                            known_states.insert(state.key.clone(), state.clone());
+                            known_states.insert(state.key.clone(), (*state).clone());
                             if update_tx.send(PollerUpdate::State(state)).await.is_err() {
                                 return;
                             }
@@ -537,12 +553,12 @@ async fn kill_target(
     }
 
     if updated.status == Status::Down {
-        return PollerUpdate::State(updated);
+        return PollerUpdate::State(Box::new(updated));
     }
 
     if let Some(message) = attempt_error {
         record_control_failure(&mut updated, action, &message);
-        return PollerUpdate::State(updated);
+        return PollerUpdate::State(Box::new(updated));
     }
 
     record_control_failure(
@@ -554,7 +570,7 @@ async fn kill_target(
             action.label()
         ),
     );
-    PollerUpdate::State(updated)
+    PollerUpdate::State(Box::new(updated))
 }
 
 async fn request_shutdown(
@@ -1382,6 +1398,7 @@ mod tests {
             username: None,
             password: None,
             tags: Vec::new(),
+            process_id: None,
         }));
         assert!(target_supports_local_signal(&Target {
             alias: None,
@@ -1390,6 +1407,7 @@ mod tests {
             username: None,
             password: None,
             tags: Vec::new(),
+            process_id: None,
         }));
         assert!(!target_supports_local_signal(&Target {
             alias: None,
@@ -1398,6 +1416,7 @@ mod tests {
             username: None,
             password: None,
             tags: Vec::new(),
+            process_id: None,
         }));
     }
 }

@@ -1,23 +1,35 @@
-## General instructions
+# reditop Agent Guide
 
-* Prefer modularity and generic code over duplication unless there is a good
-  performance reason for it.
-* Prefer defensive programming. Never ignore return values when they can fail
-  unless there is a compelling reason (rarely we may not care about a failure).
-* Make sure to use Rust's best features where appropriate, for example traits
-  and generics to abstract over different implementations of current and future
-  functionality.
-* Prefer using idiomatic cargo packages  rather than rolling our own unless
-  there is a compelling reason.
-* When adding features never just tack them on to existing code and pepper
-  specific handling code all around the codebase for this new feature. Instead
-  we always want to maingain a clean architecture, so if the feature requires
-  a sizeable redesign to do so, always prefer that.
-* Always run `cargo clippy` and follow the suggestions.
-* After implementing new functionality remember to add tests where applicable.
-* Always run `cargo test` before considerinig the task complete.
-* Remember to update `README.md` if the changes change what is documented.
-* After each change create or add `CHANGELOG.md`. As changes are added they go
-  under `## Unreleased` and then at time of tag will be formalized. Within each
-  version group changes into sections like `### Fixed`, `### Added`,
-  `### Changed`, `### Deprecated`, `### Removed`.
+## Goals
+
+* Prefer modular, reusable code over duplication unless there is a clear
+  performance reason not to.
+* Prefer defensive programming. Do not ignore fallible return values unless
+  there is a deliberate and documented reason.
+* Use idiomatic Rust abstractions when they improve the design, especially
+  traits, generics, and well-scoped types.
+* Prefer established Cargo crates over custom implementations unless there is a
+  strong reason to build in-house.
+* Keep the architecture clean when adding features. If a new feature exposes a
+  structural problem, redesign the relevant area instead of scattering special
+  cases through the codebase.
+
+## Required Before Completion
+
+These are mandatory completion steps, not optional guidance.
+
+* Run `cargo test`.
+* Run `cargo clippy` and address the reported issues.
+* Add or update tests when the change affects behavior.
+* Update `README.md` when user-facing behavior or documented workflows change.
+* Update `CHANGELOG.md` under `## Unreleased`.
+
+## Changelog Format
+
+Group unreleased changes under one or more of these headings as applicable:
+
+* `### Added`
+* `### Changed`
+* `### Fixed`
+* `### Deprecated`
+* `### Removed`

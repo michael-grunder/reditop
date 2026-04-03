@@ -1208,6 +1208,7 @@ mod tests {
             connect_timeout: Duration::from_millis(300),
             command_timeout: Duration::from_millis(500),
             concurrency_limit: 4,
+            leave_killed_servers: false,
             default_view: ViewMode::Tree,
             default_sort: SortMode::Address,
             ui_theme: UiTheme::default(),

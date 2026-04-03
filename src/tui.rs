@@ -516,7 +516,7 @@ fn drain_updates(
 ) {
     while let Ok(update) = updates_rx.try_recv() {
         match update {
-            PollerUpdate::State(state) => app.apply_update(state),
+            PollerUpdate::State(state) => app.apply_update(*state),
             PollerUpdate::Remove { key } => app.remove_instance(&key),
         }
     }
