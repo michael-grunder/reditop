@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add a tracked `.githooks/pre-push` hook that blocks pushes when
+  `cargo fmt --all --check` would reformat the tree, plus README setup
+  instructions for enabling the repo-local hooks path.
 - Add an `F9` kill picker to the overview TUI with `SHUTDOWN SAVE`,
   `SHUTDOWN NOSAVE`, `SIGINT`, `SIGTERM`, `SIGQUIT`, and `SIGKILL` actions for
   the selected server.

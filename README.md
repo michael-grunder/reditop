@@ -208,6 +208,18 @@ Run the full test suite with:
 cargo test
 ```
 
+## Git Hooks
+
+This repository includes a tracked pre-push hook in `.githooks/pre-push` that
+blocks pushes when `cargo fmt --all --check` reports required formatting
+changes.
+
+Enable the repo-local hooks path once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 The integration suite includes live, read-only Redis checks for both a
 standalone instance and a Redis Cluster. By default it probes:
 

@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+echo "Checking Rust formatting..."
+
+if ! cargo fmt --all --check; then
+    echo
+    echo "pre-push: formatting changes are required."
+    echo "Run 'cargo fmt --all' and push again."
+    exit 1
+fi
