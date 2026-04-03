@@ -466,6 +466,7 @@ fn parse_calc_kind(raw: &str) -> Result<CalcKind> {
     match raw {
         "$addr" => Ok(CalcKind::Addr),
         "$alias" => Ok(CalcKind::Alias),
+        "$pid" => Ok(CalcKind::ProcessId),
         "$role" => Ok(CalcKind::Role),
         "$cluster" => Ok(CalcKind::Cluster),
         "$status" => Ok(CalcKind::Status),
@@ -505,6 +506,7 @@ const fn default_align_for_calc(kind: &CalcKind) -> Align {
     match kind {
         CalcKind::Addr
         | CalcKind::Alias
+        | CalcKind::ProcessId
         | CalcKind::Role
         | CalcKind::Status
         | CalcKind::Cluster => Align::Left,

@@ -195,6 +195,7 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
         username: args.user.clone(),
         password: args.auth.clone(),
         tags: Vec::new(),
+        process_id: None,
     }));
     cli_targets.extend(
         args.tcp_targets
@@ -208,6 +209,7 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
                     username: args.user.clone(),
                     password: args.auth.clone(),
                     tags: Vec::new(),
+                    process_id: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?,
@@ -224,6 +226,7 @@ fn build_launch_config_from(args: Cli) -> Result<LaunchConfig> {
                 username: args.user.clone(),
                 password: args.auth.clone(),
                 tags: Vec::new(),
+                process_id: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -326,6 +329,7 @@ fn parse_target_string(raw: &str) -> Result<Target> {
         username: None,
         password: None,
         tags: Vec::new(),
+        process_id: None,
     })
 }
 
@@ -429,6 +433,9 @@ fn merge_target_context(target: &mut Target, known: &Target) {
     }
     if target.tags.is_empty() && !known.tags.is_empty() {
         target.tags.clone_from(&known.tags);
+    }
+    if target.process_id.is_none() {
+        target.process_id = known.process_id;
     }
 }
 

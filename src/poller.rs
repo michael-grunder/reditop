@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::fs;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,13 +8,14 @@ use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::discovery::{local_process_id_for_tcp_port, local_process_id_for_unix_socket};
 use crate::hotkeys::{HotkeysMetric, HotkeysStatus, parse_hotkeys_get};
 use crate::model::{
     BigkeyEntry, BigkeysMetrics, BigkeysScanStatus, ErrorDetails, InstanceState, InstanceType,
     KillAction, RuntimeSettings, Status, Target, TargetProtocol,
 };
 use crate::parse::{ClusterShard, parse_cluster_shards, parse_commandstats, parse_info};
-use crate::target_addr::{canonical_host, strip_host, tcp_host};
+use crate::target_addr::{canonical_host, is_local_addr, strip_host, tcp_host, tcp_port};
 
 const BIGKEYS_SCAN_COUNT: usize = 256;
 const BIGKEYS_TOP_N: usize = 20;
@@ -45,6 +46,12 @@ pub enum PollerRequest {
     },
 }
 
+#[derive(Debug, Clone)]
+pub enum PollerUpdate {
+    State(InstanceState),
+    Remove { key: String },
+}
+
 struct HotkeysTask {
     stop_tx: oneshot::Sender<()>,
     handle: JoinHandle<()>,
@@ -54,7 +61,7 @@ struct HotkeysTask {
 pub fn start(
     targets: Vec<Target>,
     settings: RuntimeSettings,
-) -> (mpsc::Receiver<InstanceState>, mpsc::Sender<PollerRequest>) {
+) -> (mpsc::Receiver<PollerUpdate>, mpsc::Sender<PollerRequest>) {
     let (update_tx, update_rx) = mpsc::channel(1024);
     let (request_tx, mut request_rx) = mpsc::channel::<PollerRequest>(32);
     let (task_update_tx, mut task_update_rx) = mpsc::channel::<InstanceState>(128);
@@ -76,7 +83,7 @@ pub fn start(
                         task.handle.abort();
                     }
                     known_states.insert(update.key.clone(), update.clone());
-                    if update_tx.send(update).await.is_err() {
+                    if update_tx.send(PollerUpdate::State(update)).await.is_err() {
                         return;
                     }
                     continue;
@@ -101,7 +108,7 @@ pub fn start(
 
                     for state in refreshed {
                         known_states.insert(state.key.clone(), state.clone());
-                        if update_tx.send(state).await.is_err() {
+                        if update_tx.send(PollerUpdate::State(state)).await.is_err() {
                             return;
                         }
                     }
@@ -119,7 +126,7 @@ pub fn start(
                         poll_one(&target, &settings, prior).await
                     };
                     known_states.insert(updated.key.clone(), updated.clone());
-                    if update_tx.send(updated).await.is_err() {
+                    if update_tx.send(PollerUpdate::State(updated)).await.is_err() {
                         return;
                     }
                 }
@@ -142,7 +149,7 @@ pub fn start(
                     let mut running = prior.clone();
                     running.detail.bigkeys.status = BigkeysScanStatus::Running;
                     running.detail.bigkeys.last_error = None;
-                    if update_tx.send(running.clone()).await.is_err() {
+                    if update_tx.send(PollerUpdate::State(running.clone())).await.is_err() {
                         return;
                     }
                     known_states.insert(key.clone(), running);
@@ -152,7 +159,7 @@ pub fn start(
                         poll_bigkeys(target, &settings, prior).await
                     };
                     known_states.insert(updated.key.clone(), updated.clone());
-                    if update_tx.send(updated).await.is_err() {
+                    if update_tx.send(PollerUpdate::State(updated)).await.is_err() {
                         return;
                     }
                 }
@@ -169,7 +176,7 @@ pub fn start(
 
                     let mut running = prior.clone();
                     running.detail.hotkeys.start(metric, HOTKEYS_DURATION);
-                    if update_tx.send(running.clone()).await.is_err() {
+                    if update_tx.send(PollerUpdate::State(running.clone())).await.is_err() {
                         return;
                     }
                     known_states.insert(key.clone(), running.clone());
@@ -215,9 +222,20 @@ pub fn start(
                         let _permit = semaphore.clone().acquire_owned().await.ok();
                         kill_target(target, &settings, prior, action).await
                     };
-                    known_states.insert(updated.key.clone(), updated.clone());
-                    if update_tx.send(updated).await.is_err() {
-                        return;
+                    match updated {
+                        PollerUpdate::State(state) => {
+                            known_states.insert(state.key.clone(), state.clone());
+                            if update_tx.send(PollerUpdate::State(state)).await.is_err() {
+                                return;
+                            }
+                        }
+                        PollerUpdate::Remove { key } => {
+                            known_states.remove(&key);
+                            target_map.remove(&key);
+                            if update_tx.send(PollerUpdate::Remove { key }).await.is_err() {
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -271,6 +289,9 @@ async fn poll_one(
     state.alias = target.alias.clone();
     state.addr = target.addr.clone();
     state.tags = target.tags.clone();
+    if state.detail.process_id.is_none() {
+        state.detail.process_id = target.process_id;
+    }
 
     let client = match Client::open(redis_url(target)) {
         Ok(client) => client,
@@ -322,6 +343,9 @@ async fn poll_one(
         .ok();
 
     apply_info_to_state(&mut state, &info, commandstats_info.as_deref());
+    if state.detail.process_id.is_none() {
+        state.detail.process_id = resolve_local_process_id(target, &mut conn).await;
+    }
 
     if state.detail.cluster_enabled
         && let Ok(shards) = redis::cmd("CLUSTER")
@@ -489,7 +513,7 @@ async fn kill_target(
     settings: &RuntimeSettings,
     state: InstanceState,
     action: KillAction,
-) -> InstanceState {
+) -> PollerUpdate {
     let attempt_error = match action.shutdown_arg() {
         Some(mode) => request_shutdown(target, settings, mode).await.err(),
         None => send_signal(target, &state, action).err(),
@@ -498,13 +522,19 @@ async fn kill_target(
     tokio::time::sleep(Duration::from_millis(200)).await;
     let mut updated = poll_one(target, settings, Some(state)).await;
 
+    if updated.status == Status::Down && !settings.leave_killed_servers {
+        return PollerUpdate::Remove {
+            key: updated.key.clone(),
+        };
+    }
+
     if updated.status == Status::Down {
-        return updated;
+        return PollerUpdate::State(updated);
     }
 
     if let Some(message) = attempt_error {
         record_control_failure(&mut updated, action, &message);
-        return updated;
+        return PollerUpdate::State(updated);
     }
 
     record_control_failure(
@@ -516,7 +546,7 @@ async fn kill_target(
             action.label()
         ),
     );
-    updated
+    PollerUpdate::State(updated)
 }
 
 async fn request_shutdown(
@@ -563,9 +593,9 @@ fn send_signal(target: &Target, state: &InstanceState, action: KillAction) -> Re
             action.label()
         ));
     }
-    let Some(process_id) = state.detail.process_id else {
+    let Some(process_id) = target.process_id.or(state.detail.process_id) else {
         return Err(format!(
-            "{} requires process_id from INFO server",
+            "{} requires a local process_id",
             action.label()
         ));
     };
@@ -594,10 +624,71 @@ fn send_signal(target: &Target, state: &InstanceState, action: KillAction) -> Re
 fn target_supports_local_signal(target: &Target) -> bool {
     match target.protocol {
         TargetProtocol::Unix => true,
-        TargetProtocol::Tcp => tcp_host(&target.addr).is_some_and(|host| {
+        TargetProtocol::Tcp => is_local_addr(&target.addr),
+    }
+}
+
+async fn resolve_local_process_id(
+    target: &Target,
+    conn: &mut impl redis::aio::ConnectionLike,
+) -> Option<u32> {
+    match target.protocol {
+        TargetProtocol::Unix => local_process_id_for_unix_socket(&target.addr),
+        TargetProtocol::Tcp => {
+            if !is_local_addr(&target.addr) {
+                return None;
+            }
+
+            if let Some(process_id) = tcp_port(&target.addr).and_then(local_process_id_for_tcp_port)
+            {
+                return Some(process_id);
+            }
+
+            if should_try_pidfile_lookup(target) {
+                return pid_from_config_get(conn).await;
+            }
+
+            None
+        }
+    }
+}
+
+fn should_try_pidfile_lookup(target: &Target) -> bool {
+    target.protocol == TargetProtocol::Tcp
+        && tcp_host(&target.addr).is_some_and(|host| {
             host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
-        }),
+                || host.eq("127.0.0.1")
+                || host == "::1"
+        })
+}
+
+async fn pid_from_config_get(
+    conn: &mut impl redis::aio::ConnectionLike,
+) -> Option<u32> {
+    let reply = redis::cmd("CONFIG")
+        .arg("GET")
+        .arg("pidfile")
+        .query_async::<Value>(conn)
+        .await
+        .ok()?;
+    let pidfile = parse_pidfile_from_config_get(&reply)?;
+    let raw = fs::read_to_string(pidfile).ok()?;
+    raw.trim().parse::<u32>().ok()
+}
+
+fn parse_pidfile_from_config_get(reply: &Value) -> Option<&str> {
+    match reply {
+        Value::Array(values) => values
+            .windows(2)
+            .find_map(|pair| match pair {
+                [Value::BulkString(key), Value::BulkString(value)]
+                    if key.as_slice() == b"pidfile" =>
+                {
+                    std::str::from_utf8(value).ok()
+                }
+                _ => None,
+            }),
+        _ => None,
     }
 }
 

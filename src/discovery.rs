@@ -30,6 +30,13 @@ struct CandidateCredentials {
     password: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct LocalProcessInventory {
+    ports: BTreeSet<u16>,
+    port_to_pid: HashMap<u16, u32>,
+    unix_socket_to_pid: HashMap<String, u32>,
+}
+
 impl CandidateCredentials {
     fn merge_from_target(&mut self, target: &Target) {
         if self.username.is_none() {
@@ -96,6 +103,7 @@ pub struct CandidateEndpoint {
     pub source: CandidateSource,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub process_id: Option<u32>,
 }
 
 impl CandidateEndpoint {
@@ -119,6 +127,7 @@ impl CandidateEndpoint {
             username: self.username,
             password: self.password,
             tags: vec![DISCOVERY_TAG.to_string()],
+            process_id: self.process_id,
         }
     }
 
@@ -128,6 +137,9 @@ impl CandidateEndpoint {
         }
         if self.password.is_none() {
             self.password.clone_from(&other.password);
+        }
+        if self.process_id.is_none() {
+            self.process_id = other.process_id;
         }
     }
 }
@@ -431,6 +443,7 @@ async fn generate_candidates(target: DiscoveryTarget) -> Vec<CandidateEndpoint> 
             source: CandidateSource::CuratedPorts,
             username: target.username.clone(),
             password: target.password.clone(),
+            process_id: None,
         })
         .collect::<Vec<_>>();
 
@@ -440,7 +453,7 @@ async fn generate_candidates(target: DiscoveryTarget) -> Vec<CandidateEndpoint> 
             .ok()
             .flatten()
             .unwrap_or_default();
-        let processes = tokio::task::spawn_blocking(local_process_ports)
+        let processes = tokio::task::spawn_blocking(local_process_inventory)
             .await
             .ok()
             .flatten()
@@ -451,13 +464,15 @@ async fn generate_candidates(target: DiscoveryTarget) -> Vec<CandidateEndpoint> 
             source: CandidateSource::LocalListeningSockets,
             username: target.username.clone(),
             password: target.password.clone(),
+            process_id: processes.port_to_pid.get(&port).copied(),
         }));
-        candidates.extend(processes.into_iter().map(|port| CandidateEndpoint {
+        candidates.extend(processes.ports.into_iter().map(|port| CandidateEndpoint {
             host: target.host.clone(),
             port,
             source: CandidateSource::LocalProcesses,
             username: target.username.clone(),
             password: target.password.clone(),
+            process_id: processes.port_to_pid.get(&port).copied(),
         }));
     }
 
@@ -473,6 +488,7 @@ async fn verify_candidate(
     let mut state = InstanceState::new(target.addr.clone(), target.addr.clone());
     state.addr = target.addr.clone();
     state.tags = target.tags.clone();
+    state.detail.process_id = target.process_id;
 
     let client = match Client::open(redis_url(&target)) {
         Ok(client) => client,
@@ -693,6 +709,7 @@ fn candidate_from_sentinel_map(
                     source,
                     username: seed.username.clone(),
                     password: seed.password.clone(),
+                    process_id: None,
                 })
         })
         .into_iter()
@@ -717,6 +734,7 @@ fn replication_candidates(info: &ParsedInfo, seed: &CandidateEndpoint) -> Vec<Ca
             source: CandidateSource::ReplicationPeers,
             username: seed.username.clone(),
             password: seed.password.clone(),
+            process_id: None,
         });
     }
 
@@ -738,6 +756,7 @@ fn replication_candidates(info: &ParsedInfo, seed: &CandidateEndpoint) -> Vec<Ca
                 source: CandidateSource::ReplicationPeers,
                 username: seed.username.clone(),
                 password: seed.password.clone(),
+                process_id: None,
             })
         })
     }));
@@ -752,6 +771,7 @@ fn candidate_from_target(target: Target) -> Option<CandidateEndpoint> {
         source: CandidateSource::SeedTarget,
         username: target.username,
         password: target.password,
+        process_id: target.process_id,
     })
 }
 
@@ -766,6 +786,7 @@ fn candidate_from_addr(
         source,
         username: seed.username.clone(),
         password: seed.password.clone(),
+        process_id: None,
     })
 }
 
@@ -871,20 +892,20 @@ fn is_loopback_or_any_listener(host_hex: &str) -> bool {
     )
 }
 
-fn local_process_ports() -> Option<BTreeSet<u16>> {
-    let mut ports = BTreeSet::new();
+fn local_process_inventory() -> Option<LocalProcessInventory> {
+    let mut inventory = LocalProcessInventory::default();
     for entry in fs::read_dir("/proc").ok()? {
         let Ok(entry) = entry else {
             continue;
         };
-        if !entry
-            .file_name()
-            .to_string_lossy()
-            .chars()
-            .all(|ch| ch.is_ascii_digit())
-        {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.chars().all(|ch| ch.is_ascii_digit()) {
             continue;
         }
+        let Ok(pid) = file_name.parse::<u32>() else {
+            continue;
+        };
         let path = entry.path().join("cmdline");
         let Some(tokens) = read_cmdline_tokens(&path) else {
             continue;
@@ -896,9 +917,15 @@ fn local_process_ports() -> Option<BTreeSet<u16>> {
         }) {
             continue;
         }
-        ports.extend(extract_ports_from_cmdline(&tokens));
+        for port in extract_ports_from_cmdline(&tokens) {
+            inventory.ports.insert(port);
+            inventory.port_to_pid.entry(port).or_insert(pid);
+        }
+        for socket in extract_unix_sockets_from_cmdline(&tokens) {
+            inventory.unix_socket_to_pid.entry(socket).or_insert(pid);
+        }
     }
-    Some(ports)
+    Some(inventory)
 }
 
 fn read_cmdline_tokens(path: &Path) -> Option<Vec<String>> {
@@ -936,6 +963,35 @@ fn extract_ports_from_cmdline(tokens: &[String]) -> BTreeSet<u16> {
         }
     }
     ports
+}
+
+fn extract_unix_sockets_from_cmdline(tokens: &[String]) -> BTreeSet<String> {
+    let mut sockets = BTreeSet::new();
+    let mut iter = tokens.iter().peekable();
+    while let Some(token) = iter.next() {
+        if token == "--unixsocket" && let Some(next) = iter.peek() {
+            sockets.insert((*next).clone());
+            continue;
+        }
+
+        if let Some(path) = token.strip_prefix("unixsocket:") {
+            sockets.insert(path.to_string());
+            continue;
+        }
+
+        if token.contains('/') {
+            sockets.insert(token.clone());
+        }
+    }
+    sockets
+}
+
+pub(crate) fn local_process_id_for_tcp_port(port: u16) -> Option<u32> {
+    local_process_inventory()?.port_to_pid.get(&port).copied()
+}
+
+pub(crate) fn local_process_id_for_unix_socket(path: &str) -> Option<u32> {
+    local_process_inventory()?.unix_socket_to_pid.get(path).copied()
 }
 
 fn is_localhost_host(host: &str) -> bool {

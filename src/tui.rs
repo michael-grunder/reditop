@@ -27,7 +27,7 @@ use crate::model::KillAction;
 use crate::overview::{
     ClusterGutterColor, fit_cell_text, render_plain_text, sort_direction_symbol, sortable_header,
 };
-use crate::poller::{self, PollerRequest};
+use crate::poller::{self, PollerRequest, PollerUpdate};
 use crate::registry::ColumnRegistry;
 use crate::target_addr::tcp_host;
 
@@ -510,12 +510,15 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
 
 fn drain_updates(
     app: &mut AppState,
-    updates_rx: &mut tokio::sync::mpsc::Receiver<crate::model::InstanceState>,
+    updates_rx: &mut tokio::sync::mpsc::Receiver<PollerUpdate>,
     discovery_rx: &mut tokio::sync::mpsc::Receiver<DiscoveryEvent>,
     request_tx: &tokio::sync::mpsc::Sender<PollerRequest>,
 ) {
     while let Ok(update) = updates_rx.try_recv() {
-        app.apply_update(update);
+        match update {
+            PollerUpdate::State(state) => app.apply_update(state),
+            PollerUpdate::Remove { key } => app.remove_instance(&key),
+        }
     }
     while let Ok(event) = discovery_rx.try_recv() {
         app.apply_discovery_event(&event);

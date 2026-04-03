@@ -24,6 +24,7 @@ struct GlobalConfig {
     view_default: Option<String>,
     sort_default: Option<String>,
     still_autodiscover: Option<bool>,
+    leave_killed_servers: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -56,6 +57,7 @@ pub struct RuntimeOverrides {
     pub connect_timeout_ms: Option<u64>,
     pub command_timeout_ms: Option<u64>,
     pub concurrency_limit: Option<usize>,
+    pub leave_killed_servers: Option<bool>,
     pub view_default: Option<ViewMode>,
     pub sort_default: Option<SortMode>,
     pub ui_theme: Option<UiTheme>,
@@ -74,6 +76,7 @@ pub fn default_settings() -> RuntimeSettings {
         connect_timeout: std::time::Duration::from_millis(300),
         command_timeout: std::time::Duration::from_millis(500),
         concurrency_limit: 16,
+        leave_killed_servers: false,
         default_view: ViewMode::Tree,
         default_sort: SortMode::Address,
         ui_theme: UiTheme::default(),
@@ -132,6 +135,7 @@ pub fn load_config(path: Option<&Path>, no_default_config: bool) -> Result<Loade
                 username: entry.username,
                 password,
                 tags: entry.tags.unwrap_or_default(),
+                process_id: None,
             });
         }
     }
@@ -143,6 +147,7 @@ pub fn load_config(path: Option<&Path>, no_default_config: bool) -> Result<Loade
             connect_timeout_ms: global.connect_timeout_ms,
             command_timeout_ms: global.command_timeout_ms,
             concurrency_limit: global.concurrency_limit,
+            leave_killed_servers: global.leave_killed_servers,
             view_default: parse_view(global.view_default.as_deref())?,
             sort_default: parse_sort(global.sort_default.as_deref())?,
             ui_theme: parse_theme(parsed.theme)?,
@@ -164,6 +169,9 @@ pub fn apply_overrides(mut base: RuntimeSettings, overrides: &RuntimeOverrides) 
     }
     if let Some(limit) = overrides.concurrency_limit {
         base.concurrency_limit = limit.max(1);
+    }
+    if let Some(leave_killed_servers) = overrides.leave_killed_servers {
+        base.leave_killed_servers = leave_killed_servers;
     }
     if let Some(view) = overrides.view_default {
         base.default_view = view;

@@ -34,6 +34,7 @@ pub async fn discover_cluster_targets(
                     username: seed.username.clone(),
                     password: seed.password.clone(),
                     tags: Vec::new(),
+                    process_id: None,
                 }));
             }
             Err(err) => errors.push(format!("{}: {err}", seed.addr)),

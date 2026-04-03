@@ -16,6 +16,16 @@ min_width = 14
 ideal_width = 21
 max_width = 32
 
+[columns.pid]
+type = "calc"
+header = "PID"
+calc = "$pid"
+align = "right"
+min_width = 3
+ideal_width = 6
+max_width = 10
+missing = "-"
+
 [columns.role]
 type = "calc"
 header = "Type"

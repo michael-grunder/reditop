@@ -137,6 +137,7 @@ pub struct Target {
     pub username: Option<String>,
     pub password: Option<String>,
     pub tags: Vec<String>,
+    pub process_id: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +146,7 @@ pub struct RuntimeSettings {
     pub connect_timeout: Duration,
     pub command_timeout: Duration,
     pub concurrency_limit: usize,
+    pub leave_killed_servers: bool,
     pub default_view: ViewMode,
     pub default_sort: SortMode,
     pub ui_theme: UiTheme,

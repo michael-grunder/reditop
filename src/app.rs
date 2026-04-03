@@ -153,6 +153,15 @@ impl AppState {
         self.clamp_selection();
     }
 
+    pub fn remove_instance(&mut self, key: &str) {
+        self.instances.remove(key);
+        self.hotkeys_locally_reset.remove(key);
+        self.pending_transient_emphasis
+            .retain(|_, winner| winner != key);
+        self.transient_emphasis_records.remove(key);
+        self.clamp_selection();
+    }
+
     pub fn reset_hotkeys_locally(&mut self, key: &str) {
         self.hotkeys_locally_reset.insert(key.to_string());
         if let Some(instance) = self.instances.get_mut(key) {

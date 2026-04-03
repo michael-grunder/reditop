@@ -3,11 +3,13 @@ use crate::column::{
     SortCtx, SortKey, WidthHint, compact_role, default_label, format_millis, format_percent,
     nonnegative_f64_to_u64, parse_u64, status_text, u64_to_f64,
 };
+use crate::target_addr::is_local_addr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CalcKind {
     Addr,
     Alias,
+    ProcessId,
     Role,
     Cluster,
     Status,
@@ -52,6 +54,10 @@ impl CalcColumn {
                     .unwrap_or_else(|| default_label(&snap.addr, ctx.omit_host));
                 Some(format!("{}{}", ctx.tree_prefix, base))
             }
+            CalcKind::ProcessId => is_local_addr(&snap.addr)
+                .then_some(snap.detail.process_id)
+                .flatten()
+                .map(|value| value.to_string()),
             CalcKind::Role => Some(compact_role(snap).to_string()),
             CalcKind::Cluster => Some(ctx.cluster_label.unwrap_or("?").to_string()),
             CalcKind::Status => Some(status_text(snap.status).to_string()),
@@ -103,6 +109,10 @@ impl CalcColumn {
                     .unwrap_or_else(|| default_label(&snap.addr, ctx.omit_host));
                 SortKey::Str(value.to_ascii_lowercase())
             }
+            CalcKind::ProcessId => is_local_addr(&snap.addr)
+                .then_some(snap.detail.process_id)
+                .flatten()
+                .map_or(SortKey::Null, |value| SortKey::U64(u64::from(value))),
             CalcKind::Role => SortKey::Str(compact_role(snap).to_string()),
             CalcKind::Cluster => ctx
                 .cluster_label

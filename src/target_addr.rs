@@ -47,6 +47,17 @@ pub fn tcp_endpoint_identity(addr: &str) -> Option<String> {
     Some(format!("{normalized_host}:{port}"))
 }
 
+pub fn is_local_addr(addr: &str) -> bool {
+    if addr.contains('/') {
+        return true;
+    }
+
+    tcp_host(addr).is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    })
+}
+
 pub fn strip_host(addr: &str) -> Option<String> {
     if addr.contains('/') {
         return None;
