@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::column::{Emphasis, EmphasisLifetime, RenderCtx, SortCtx, SortKey};
 use crate::discovery::{DiscoveryEvent, DiscoveryStatus, VerifiedInstance};
-use crate::model::{InstanceState, InstanceType, RuntimeSettings, SortDirection, ViewMode};
+use crate::model::{
+    InstanceState, InstanceType, KillAction, RuntimeSettings, SortDirection, ViewMode,
+};
 use crate::registry::ColumnRegistry;
 use crate::target_addr::canonical_host;
 use crate::topology::{TreeGroup, build_tree_groups};
@@ -26,6 +28,7 @@ pub enum OverviewModal {
     None,
     SortPicker,
     ColumnPicker,
+    KillPicker,
 }
 
 impl FilterPromptMode {
@@ -65,6 +68,7 @@ pub struct AppState {
     pub overview_modal: OverviewModal,
     pub sort_picker_index: usize,
     pub column_picker_index: usize,
+    pub kill_picker_index: usize,
     pub column_picker_reorder_mode: bool,
     pub filter: String,
     pub is_filtering: bool,
@@ -107,6 +111,7 @@ impl AppState {
             overview_modal: OverviewModal::None,
             sort_picker_index: 0,
             column_picker_index: 0,
+            kill_picker_index: 0,
             column_picker_reorder_mode: false,
             settings,
             filter: String::new(),
@@ -568,6 +573,11 @@ impl AppState {
         self.overview_modal = OverviewModal::ColumnPicker;
     }
 
+    pub const fn open_kill_picker(&mut self) {
+        self.kill_picker_index = 0;
+        self.overview_modal = OverviewModal::KillPicker;
+    }
+
     pub const fn close_overview_modal(&mut self) {
         self.column_picker_reorder_mode = false;
         self.overview_modal = OverviewModal::None;
@@ -612,6 +622,13 @@ impl AppState {
         let max_index = isize::try_from(columns.len() - 1).unwrap_or(isize::MAX);
         let next = (current + delta).clamp(0, max_index);
         self.column_picker_index = usize::try_from(next).unwrap_or(0);
+    }
+
+    pub fn move_kill_picker_selection(&mut self, delta: isize) {
+        let current = isize::try_from(self.kill_picker_index).unwrap_or(isize::MAX);
+        let max_index = isize::try_from(KillAction::ALL.len().saturating_sub(1)).unwrap_or(0);
+        let next = (current + delta).clamp(0, max_index);
+        self.kill_picker_index = usize::try_from(next).unwrap_or(0);
     }
 
     pub fn set_column_picker_reorder_mode(&mut self, enabled: bool) {
@@ -700,6 +717,14 @@ impl AppState {
 
     pub fn is_column_picker_open(&self) -> bool {
         self.overview_modal == OverviewModal::ColumnPicker
+    }
+
+    pub fn is_kill_picker_open(&self) -> bool {
+        self.overview_modal == OverviewModal::KillPicker
+    }
+
+    pub fn selected_kill_action(&self) -> Option<KillAction> {
+        KillAction::ALL.get(self.kill_picker_index).copied()
     }
 
     pub fn is_column_visible(&self, column_key: &str) -> bool {

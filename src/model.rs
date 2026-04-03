@@ -75,6 +75,60 @@ pub enum TargetProtocol {
     Unix,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillAction {
+    ShutdownSave,
+    ShutdownNosave,
+    Sigint,
+    Sigterm,
+    Sigquit,
+    Sigkill,
+}
+
+impl KillAction {
+    pub const ALL: [Self; 6] = [
+        Self::ShutdownSave,
+        Self::ShutdownNosave,
+        Self::Sigint,
+        Self::Sigterm,
+        Self::Sigquit,
+        Self::Sigkill,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ShutdownSave => "SHUTDOWN SAVE",
+            Self::ShutdownNosave => "SHUTDOWN NOSAVE",
+            Self::Sigint => "SIGINT",
+            Self::Sigterm => "SIGTERM",
+            Self::Sigquit => "SIGQUIT",
+            Self::Sigkill => "SIGKILL",
+        }
+    }
+
+    pub const fn shutdown_arg(self) -> Option<&'static str> {
+        match self {
+            Self::ShutdownSave => Some("SAVE"),
+            Self::ShutdownNosave => Some("NOSAVE"),
+            _ => None,
+        }
+    }
+
+    pub const fn signal_name(self) -> Option<&'static str> {
+        match self {
+            Self::Sigint => Some("INT"),
+            Self::Sigterm => Some("TERM"),
+            Self::Sigquit => Some("QUIT"),
+            Self::Sigkill => Some("KILL"),
+            _ => None,
+        }
+    }
+
+    pub const fn is_signal(self) -> bool {
+        self.signal_name().is_some()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Target {
     pub alias: Option<String>,
@@ -211,6 +265,7 @@ pub struct ErrorDetails {
 #[derive(Debug, Clone, Default)]
 pub struct DetailMetrics {
     pub redis_version: Option<String>,
+    pub process_id: Option<u32>,
     pub uptime_seconds: Option<u64>,
     pub used_memory_rss: Option<u64>,
     pub total_commands_processed: Option<u64>,

@@ -14,6 +14,7 @@
   server-reported error details when polling fails
 - Tree, flat, and primary-only overview modes
 - Sorting by currently visible column keys and substring filtering
+- Kill picker on `F9` with Redis `SHUTDOWN` and local signal options
 - Bottom status/key bar with htop-style function key labels and live search/filter input echo
 - Live discovery status in the footer, including queued/probing/verified counts
 - Config loading from TOML + CLI target merge
@@ -30,6 +31,7 @@
 - `F5`: cycle Tree / Flat / Primary (overview)
 - `F6`: open sort picker from currently visible overview columns
 - `F7`: open overview column picker for toggling and reordering visible columns
+- `F9`: open kill picker for the selected overview row
 - `H`: open full help page
 - `?`: toggle help
 - `Up/Down`: move selection in overview, or scroll the active detail pane when it has more rows than fit
@@ -46,6 +48,11 @@
 - `C` / `N`: start CPU or NET sampling while the `Hotkeys` tab is open
 - `X`: stop active `Hotkeys` sampling early, or reset the `Hotkeys` pane back to its idle prompt
 - `r` / `R`: refresh now, rerun the on-demand `Bigkeys` scan, or rerun `Hotkeys` sampling for the last selected metric while that tab is open
+
+The `F9` kill picker offers `SHUTDOWN SAVE`, `SHUTDOWN NOSAVE`, `SIGINT`,
+`SIGTERM`, `SIGQUIT`, and `SIGKILL`. The Redis shutdown commands work over the
+current connection, while the signal-based options require a local TCP or Unix
+socket target plus `process_id` from `INFO server`.
 
 The `Bigkeys` detail tab mirrors `redis-cli --bigkeys`: it scans the keyspace with
 `SCAN`, fetches each key's type, runs the matching cardinality/length command

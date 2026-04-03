@@ -23,11 +23,13 @@ use crate::cli::{LaunchConfig, OutputMode};
 use crate::column::EmphasisStyle;
 use crate::discovery::{self, DiscoveryEvent};
 use crate::hotkeys::{HotkeysMetric, HotkeysStatus};
+use crate::model::KillAction;
 use crate::overview::{
     ClusterGutterColor, fit_cell_text, render_plain_text, sort_direction_symbol, sortable_header,
 };
 use crate::poller::{self, PollerRequest};
 use crate::registry::ColumnRegistry;
+use crate::target_addr::tcp_host;
 
 struct DetailTabSpec {
     title: &'static str,
@@ -314,6 +316,24 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
+            if app.is_kill_picker_open() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => app.close_overview_modal(),
+                    KeyCode::Up => app.move_kill_picker_selection(-1),
+                    KeyCode::Down => app.move_kill_picker_selection(1),
+                    KeyCode::Enter => {
+                        if let (Some(key), Some(action)) =
+                            (app.selected_key(), app.selected_kill_action())
+                        {
+                            let _ = request_tx.try_send(PollerRequest::KillTarget { key, action });
+                        }
+                        app.close_overview_modal();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -333,6 +353,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 }
                 KeyCode::F(7) | KeyCode::Char('v') if app.active_view == ActiveView::Overview => {
                     app.open_column_picker();
+                }
+                KeyCode::F(9) if app.active_view == ActiveView::Overview => {
+                    if app.selected_key().is_some() {
+                        app.open_kill_picker();
+                    }
                 }
                 KeyCode::Char('h') if app.active_view == ActiveView::Overview => {
                     app.toggle_host_rendering();
@@ -733,7 +758,7 @@ fn handle_overlay_quit_key(app: &mut AppState, key: KeyEvent) -> bool {
         return true;
     }
 
-    if app.is_sort_picker_open() || app.is_column_picker_open() {
+    if app.is_sort_picker_open() || app.is_column_picker_open() || app.is_kill_picker_open() {
         app.close_overview_modal();
         return true;
     }
@@ -782,6 +807,10 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
 
     if app.is_column_picker_open() {
         draw_column_picker(frame, area, app);
+    }
+
+    if app.is_kill_picker_open() {
+        draw_kill_picker(frame, area, app);
     }
 
     if app.show_help {
@@ -1878,7 +1907,7 @@ fn status_bar_actions(app: &AppState) -> Line<'static> {
     }
 
     let footer_actions = format!(
-        "F1Help  F3Search  F4Filter  F5{}  F6SortBy  F7Columns",
+        "F1Help  F3Search  F4Filter  F5{}  F6SortBy  F7Columns  F9Kill",
         app.view_mode.footer_label()
     );
     let footer = app.discovery_status.footer_summary().map_or_else(
@@ -1956,6 +1985,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "F7",
             "Toggle visible overview columns and reorder visible ones",
         ),
+        ("F9", "Open the kill picker for the selected overview row"),
         ("t", "Cycle Tree, Flat, and Primary view in overview"),
         ("s", "Cycle sort column in overview"),
         ("v", "Open overview column picker"),
@@ -1986,7 +2016,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/K jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nX stops active Hotkeys sampling early or resets the pane\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/K jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nX stops active Hotkeys sampling early or resets the pane\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nF9 open kill picker\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -2101,6 +2131,85 @@ fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState
 
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(table, popup, &mut state);
+}
+
+fn draw_kill_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
+    let width = area.width.saturating_mul(45) / 100;
+    let height = area.height.saturating_mul(60) / 100;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    let signal_supported = selected_signal_supported(app);
+    let rows: Vec<Row<'_>> = KillAction::ALL
+        .iter()
+        .map(|action| {
+            let suffix = if action.is_signal() && !signal_supported {
+                " (needs local process_id)"
+            } else {
+                ""
+            };
+            Row::new(vec![Cell::from(format!("{}{}", action.label(), suffix))])
+        })
+        .collect();
+    let table = Table::new(rows, [Constraint::Percentage(100)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(kill_picker_title(app))
+                .style(base_style(app)),
+        )
+        .style(base_style(app))
+        .row_highlight_style(
+            Style::default()
+                .fg(carat_color(app))
+                .bg(background_color(app))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    let mut state =
+        ratatui::widgets::TableState::default().with_selected(Some(app.kill_picker_index));
+
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(table, popup, &mut state);
+}
+
+fn kill_picker_title(app: &AppState) -> String {
+    let selected = app
+        .selected_key()
+        .and_then(|key| app.instances.get(&key))
+        .map_or_else(
+            || "selected server".to_string(),
+            |instance| {
+                instance
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| instance.addr.clone())
+            },
+        );
+    format!("Kill {selected} (Enter select, Esc cancel)")
+}
+
+fn selected_signal_supported(app: &AppState) -> bool {
+    let Some(key) = app.selected_key() else {
+        return false;
+    };
+    let Some(instance) = app.instances.get(&key) else {
+        return false;
+    };
+    instance.detail.process_id.is_some()
+        && if instance.addr.contains('/') {
+            true
+        } else {
+            tcp_host(&instance.addr).is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+        }
 }
 
 fn handle_column_picker_key(app: &mut AppState, key: KeyEvent) -> bool {
@@ -2242,7 +2351,7 @@ mod tests {
         compute_column_widths, detail_tab_index_for_shortcut, detail_tabs_widget, draw,
         draw_status_bar, format_aligned_rows, format_with_commas, handle_column_picker_key,
         handle_overlay_quit_key, handle_primary_view_quit_key, help_bindings, is_force_quit_key,
-        ratatui_color_from_cluster,
+        ratatui_color_from_cluster, selected_signal_supported,
     };
     use crate::app::{ActiveView, AppState, OverviewModal};
     use crate::column::{Align, CellText, Column, RenderCtx, SortCtx, SortKey, WidthHint};
@@ -2307,6 +2416,7 @@ mod tests {
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F4"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F5"));
         assert!(help_bindings().iter().any(|(keys, _)| *keys == "F6"));
+        assert!(help_bindings().iter().any(|(keys, _)| *keys == "F9"));
     }
 
     #[test]
@@ -2416,6 +2526,32 @@ mod tests {
         assert!(handled);
         assert_eq!(app.overview_modal, OverviewModal::None);
         assert!(!app.column_picker_reorder_mode);
+    }
+
+    #[test]
+    fn q_closes_kill_picker_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::KillPicker;
+
+        let handled = handle_overlay_quit_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+
+        assert!(handled);
+        assert_eq!(app.overview_modal, OverviewModal::None);
+    }
+
+    #[test]
+    fn esc_closes_kill_picker_instead_of_quitting() {
+        let mut app = AppState::new(default_settings(), test_registry());
+        app.overview_modal = OverviewModal::KillPicker;
+
+        let handled =
+            handle_overlay_quit_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(handled);
+        assert_eq!(app.overview_modal, OverviewModal::None);
     }
 
     #[test]
@@ -2691,6 +2827,25 @@ mod tests {
 
         let lines = buffer_lines(terminal.backend().buffer());
         assert!(lines.iter().any(|line| line.contains("F5Primary")));
+        assert!(lines.iter().any(|line| line.contains("F9Kill")));
+    }
+
+    #[test]
+    fn selected_signal_supported_requires_local_process_id() {
+        let mut app = crate::app::AppState::new(default_settings(), test_registry());
+        let mut local = InstanceState::new("127.0.0.1:6379".into(), "127.0.0.1:6379".into());
+        local.detail.process_id = Some(42);
+        app.apply_update(local);
+
+        assert!(selected_signal_supported(&app));
+
+        let mut remote =
+            InstanceState::new("redis.example:6379".into(), "redis.example:6379".into());
+        remote.detail.process_id = Some(42);
+        app.instances.insert(remote.key.clone(), remote);
+        app.selected_index = 1;
+
+        assert!(!selected_signal_supported(&app));
     }
 
     #[test]

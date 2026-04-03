@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add an `F9` kill picker to the overview TUI with `SHUTDOWN SAVE`,
+  `SHUTDOWN NOSAVE`, `SIGINT`, `SIGTERM`, `SIGQUIT`, and `SIGKILL` actions for
+  the selected server.
 - Add a new `Hotkeys` detail pane that can start timed Redis `HOTKEYS`
   sampling for `CPU` or `NET`, show a live countdown, fetch the results
   automatically, and browse them with the same `/` filtering and scrolling

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,10 +11,10 @@ use tokio::task::JoinHandle;
 use crate::hotkeys::{HotkeysMetric, HotkeysStatus, parse_hotkeys_get};
 use crate::model::{
     BigkeyEntry, BigkeysMetrics, BigkeysScanStatus, ErrorDetails, InstanceState, InstanceType,
-    RuntimeSettings, Status, Target, TargetProtocol,
+    KillAction, RuntimeSettings, Status, Target, TargetProtocol,
 };
 use crate::parse::{ClusterShard, parse_cluster_shards, parse_commandstats, parse_info};
-use crate::target_addr::{canonical_host, strip_host};
+use crate::target_addr::{canonical_host, strip_host, tcp_host};
 
 const BIGKEYS_SCAN_COUNT: usize = 256;
 const BIGKEYS_TOP_N: usize = 20;
@@ -36,6 +38,10 @@ pub enum PollerRequest {
     },
     StopHotkeys {
         key: String,
+    },
+    KillTarget {
+        key: String,
+        action: KillAction,
     },
 }
 
@@ -191,6 +197,28 @@ pub fn start(
                         continue;
                     };
                     let _ = task.stop_tx.send(());
+                }
+                PollerRequest::KillTarget { key, action } => {
+                    let Some(target) = target_map.get(&key) else {
+                        continue;
+                    };
+                    let Some(prior) = known_states.get(&key).cloned() else {
+                        continue;
+                    };
+
+                    if let Some(task) = hotkeys_tasks.remove(&key) {
+                        let _ = task.stop_tx.send(());
+                        task.handle.abort();
+                    }
+
+                    let updated = {
+                        let _permit = semaphore.clone().acquire_owned().await.ok();
+                        kill_target(target, &settings, prior, action).await
+                    };
+                    known_states.insert(updated.key.clone(), updated.clone());
+                    if update_tx.send(updated).await.is_err() {
+                        return;
+                    }
                 }
             }
         }
@@ -456,6 +484,129 @@ async fn poll_hotkeys(
     state
 }
 
+async fn kill_target(
+    target: &Target,
+    settings: &RuntimeSettings,
+    state: InstanceState,
+    action: KillAction,
+) -> InstanceState {
+    let attempt_error = match action.shutdown_arg() {
+        Some(mode) => request_shutdown(target, settings, mode).await.err(),
+        None => send_signal(target, &state, action).err(),
+    };
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut updated = poll_one(target, settings, Some(state)).await;
+
+    if updated.status == Status::Down {
+        return updated;
+    }
+
+    if let Some(message) = attempt_error {
+        record_control_failure(&mut updated, action, &message);
+        return updated;
+    }
+
+    record_control_failure(
+        &mut updated,
+        action,
+        &format!(
+            "{} is still reachable after {}",
+            target.addr,
+            action.label()
+        ),
+    );
+    updated
+}
+
+async fn request_shutdown(
+    target: &Target,
+    settings: &RuntimeSettings,
+    mode: &str,
+) -> Result<(), String> {
+    let client = Client::open(redis_url(target)).map_err(|err| err.to_string())?;
+    let config = AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(settings.connect_timeout))
+        .set_response_timeout(Some(settings.command_timeout));
+    let mut conn = client
+        .get_multiplexed_async_connection_with_config(&config)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let result = redis::cmd("SHUTDOWN")
+        .arg(mode)
+        .query_async::<Value>(&mut conn)
+        .await;
+    if let Err(err) = result {
+        let message = err.to_string();
+        let normalized = message.to_ascii_lowercase();
+        if normalized.contains("connection reset")
+            || normalized.contains("broken pipe")
+            || normalized.contains("closed")
+            || normalized.contains("unexpected eof")
+        {
+            return Ok(());
+        }
+        return Err(message);
+    }
+
+    Ok(())
+}
+
+fn send_signal(target: &Target, state: &InstanceState, action: KillAction) -> Result<(), String> {
+    let Some(signal) = action.signal_name() else {
+        return Err(format!("{} is not a signal action", action.label()));
+    };
+    if !target_supports_local_signal(target) {
+        return Err(format!(
+            "{} only works for local TCP or Unix socket targets",
+            action.label()
+        ));
+    }
+    let Some(process_id) = state.detail.process_id else {
+        return Err(format!(
+            "{} requires process_id from INFO server",
+            action.label()
+        ));
+    };
+
+    let output = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(process_id.to_string())
+        .output()
+        .map_err(|err| err.to_string())?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        Err(format!(
+            "kill -{signal} {process_id} exited with {}",
+            output.status
+        ))
+    } else {
+        Err(stderr)
+    }
+}
+
+fn target_supports_local_signal(target: &Target) -> bool {
+    match target.protocol {
+        TargetProtocol::Unix => true,
+        TargetProtocol::Tcp => tcp_host(&target.addr).is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+        }),
+    }
+}
+
+fn record_control_failure(state: &mut InstanceState, action: KillAction, message: &str) {
+    let details = error_details(format!("{} failed: {message}", action.label()));
+    state.last_error = Some(details.summary.clone());
+    state.error_details = Some(details);
+}
+
 async fn prepare_bigkeys_connection(
     conn: &mut impl redis::aio::ConnectionLike,
     state: &InstanceState,
@@ -480,6 +631,9 @@ pub(crate) fn apply_info_to_state(
     state.ops_per_sec = info.get_u64("stats", "instantaneous_ops_per_sec");
 
     state.detail.redis_version = info.get("server", "redis_version").map(str::to_string);
+    state.detail.process_id = info
+        .get("server", "process_id")
+        .and_then(|value| value.parse::<u32>().ok());
     state.detail.uptime_seconds = info.get_u64("server", "uptime_in_seconds");
     state.detail.used_memory_rss = info.get_u64("memory", "used_memory_rss");
     state.detail.total_commands_processed = info.get_u64("stats", "total_commands_processed");
@@ -924,9 +1078,9 @@ mod tests {
     use super::{
         BIGKEYS_TOP_N, BigkeyEntry, apply_timed_failure, bigkeys_requires_readonly,
         classify_error_status, cluster_signature, error_details, insert_bigkey_entry,
-        key_type_size_command,
+        key_type_size_command, target_supports_local_signal,
     };
-    use crate::model::{DetailMetrics, InstanceState, Status};
+    use crate::model::{DetailMetrics, InstanceState, Status, Target, TargetProtocol};
     use crate::parse::{ClusterShard, ClusterShardNode, ClusterShardRole, parse_cluster_shards};
 
     #[test]
@@ -1116,5 +1270,46 @@ mod tests {
         assert_eq!(state.status, Status::Down);
         assert_eq!(state.last_latency_ms, None);
         assert!(state.max_latency_ms.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn apply_info_to_state_parses_process_id() {
+        let mut state = InstanceState::new("node".into(), "127.0.0.1:6379".into());
+
+        super::apply_info_to_state(
+            &mut state,
+            "# Server\r\nredis_version:8.0.0\r\nprocess_id:4242\r\nuptime_in_seconds:12\r\n",
+            None,
+        );
+
+        assert_eq!(state.detail.process_id, Some(4242));
+    }
+
+    #[test]
+    fn local_signal_support_requires_local_targets() {
+        assert!(target_supports_local_signal(&Target {
+            alias: None,
+            addr: "127.0.0.1:6379".into(),
+            protocol: TargetProtocol::Tcp,
+            username: None,
+            password: None,
+            tags: Vec::new(),
+        }));
+        assert!(target_supports_local_signal(&Target {
+            alias: None,
+            addr: "/tmp/redis.sock".into(),
+            protocol: TargetProtocol::Unix,
+            username: None,
+            password: None,
+            tags: Vec::new(),
+        }));
+        assert!(!target_supports_local_signal(&Target {
+            alias: None,
+            addr: "redis.example:6379".into(),
+            protocol: TargetProtocol::Tcp,
+            username: None,
+            password: None,
+            tags: Vec::new(),
+        }));
     }
 }
