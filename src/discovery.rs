@@ -969,7 +969,9 @@ fn extract_unix_sockets_from_cmdline(tokens: &[String]) -> BTreeSet<String> {
     let mut sockets = BTreeSet::new();
     let mut iter = tokens.iter().peekable();
     while let Some(token) = iter.next() {
-        if token == "--unixsocket" && let Some(next) = iter.peek() {
+        if token == "--unixsocket"
+            && let Some(next) = iter.peek()
+        {
             sockets.insert((*next).clone());
             continue;
         }
@@ -991,7 +993,10 @@ pub(crate) fn local_process_id_for_tcp_port(port: u16) -> Option<u32> {
 }
 
 pub(crate) fn local_process_id_for_unix_socket(path: &str) -> Option<u32> {
-    local_process_inventory()?.unix_socket_to_pid.get(path).copied()
+    local_process_inventory()?
+        .unix_socket_to_pid
+        .get(path)
+        .copied()
 }
 
 fn is_localhost_host(host: &str) -> bool {

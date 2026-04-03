@@ -149,7 +149,11 @@ pub fn start(
                     let mut running = prior.clone();
                     running.detail.bigkeys.status = BigkeysScanStatus::Running;
                     running.detail.bigkeys.last_error = None;
-                    if update_tx.send(PollerUpdate::State(running.clone())).await.is_err() {
+                    if update_tx
+                        .send(PollerUpdate::State(running.clone()))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                     known_states.insert(key.clone(), running);
@@ -176,7 +180,11 @@ pub fn start(
 
                     let mut running = prior.clone();
                     running.detail.hotkeys.start(metric, HOTKEYS_DURATION);
-                    if update_tx.send(PollerUpdate::State(running.clone())).await.is_err() {
+                    if update_tx
+                        .send(PollerUpdate::State(running.clone()))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                     known_states.insert(key.clone(), running.clone());
@@ -594,10 +602,7 @@ fn send_signal(target: &Target, state: &InstanceState, action: KillAction) -> Re
         ));
     }
     let Some(process_id) = target.process_id.or(state.detail.process_id) else {
-        return Err(format!(
-            "{} requires a local process_id",
-            action.label()
-        ));
+        return Err(format!("{} requires a local process_id", action.label()));
     };
 
     let output = Command::new("kill")
@@ -656,15 +661,11 @@ async fn resolve_local_process_id(
 fn should_try_pidfile_lookup(target: &Target) -> bool {
     target.protocol == TargetProtocol::Tcp
         && tcp_host(&target.addr).is_some_and(|host| {
-            host.eq_ignore_ascii_case("localhost")
-                || host.eq("127.0.0.1")
-                || host == "::1"
+            host.eq_ignore_ascii_case("localhost") || host.eq("127.0.0.1") || host == "::1"
         })
 }
 
-async fn pid_from_config_get(
-    conn: &mut impl redis::aio::ConnectionLike,
-) -> Option<u32> {
+async fn pid_from_config_get(conn: &mut impl redis::aio::ConnectionLike) -> Option<u32> {
     let reply = redis::cmd("CONFIG")
         .arg("GET")
         .arg("pidfile")
@@ -678,16 +679,12 @@ async fn pid_from_config_get(
 
 fn parse_pidfile_from_config_get(reply: &Value) -> Option<&str> {
     match reply {
-        Value::Array(values) => values
-            .windows(2)
-            .find_map(|pair| match pair {
-                [Value::BulkString(key), Value::BulkString(value)]
-                    if key.as_slice() == b"pidfile" =>
-                {
-                    std::str::from_utf8(value).ok()
-                }
-                _ => None,
-            }),
+        Value::Array(values) => values.windows(2).find_map(|pair| match pair {
+            [Value::BulkString(key), Value::BulkString(value)] if key.as_slice() == b"pidfile" => {
+                std::str::from_utf8(value).ok()
+            }
+            _ => None,
+        }),
         _ => None,
     }
 }
