@@ -70,6 +70,8 @@
 
 ### Fixed
 
+- Read the `master_repl_offset` overview column from Redis' actual
+  `INFO replication` field name, so `ReplOff` renders instead of staying `-`.
 - Fix stale test fixtures after the `process_id`, `leave_killed_servers`, and
   boxed poller update model changes so `cargo test` and `cargo clippy` pass
   again.

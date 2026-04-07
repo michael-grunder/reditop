@@ -59,7 +59,7 @@ missing = "-"
 [columns.master_repl_offset]
 type = "info"
 header = "ReplOff"
-info_key = "replication-offset"
+info_key = "master_repl_offset"
 value_type = "u64"
 format = "raw"
 align = "right"

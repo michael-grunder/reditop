@@ -1302,6 +1302,26 @@ mod tests {
     }
 
     #[test]
+    fn render_cell_reads_master_replication_offset_from_info() {
+        let mut app = app();
+
+        let mut primary = InstanceState::new("primary".into(), "127.0.0.1:6379".into());
+        primary.kind = InstanceType::Primary;
+        primary
+            .info
+            .insert("master_repl_offset".into(), "8909571199".into());
+
+        app.apply_update(primary);
+
+        let rows = app.visible_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            app.render_cell(&rows[0], "master_repl_offset").as_deref(),
+            Some("8909571199")
+        );
+    }
+
+    #[test]
     fn view_mode_cycles_through_all_overview_modes() {
         assert_eq!(ViewMode::Tree.cycle(), ViewMode::Flat);
         assert_eq!(ViewMode::Flat.cycle(), ViewMode::Primary);
