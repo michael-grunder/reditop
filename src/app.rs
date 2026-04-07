@@ -527,7 +527,7 @@ impl AppState {
                     .any(|visible| visible == *key)
             })
             .filter(|key| self.column_registry.column(key).is_some())
-            .filter(|key| self.show_address_column() || key.as_str() != "addr")
+            .filter(|key| !self.is_column_auto_hidden(key))
             .cloned()
             .collect()
     }
@@ -550,6 +550,14 @@ impl AppState {
             .filter(|key| self.column_registry.column(key).is_some())
             .cloned()
             .collect()
+    }
+
+    pub fn column_auto_hidden_suffix(&self, column_key: &str) -> Option<&'static str> {
+        match column_key {
+            "addr" if self.is_column_auto_hidden(column_key) => Some(" (auto hidden)"),
+            "role" if self.is_column_auto_hidden(column_key) => Some(" (auto hidden in Tree)"),
+            _ => None,
+        }
     }
 
     pub fn sort_label(&self) -> String {
@@ -687,7 +695,7 @@ impl AppState {
                 .iter()
                 .filter(|key| key.as_str() != chosen_key)
                 .filter(|key| self.column_registry.column(key).is_some())
-                .filter(|key| self.show_address_column() || key.as_str() != "addr")
+                .filter(|key| !self.is_column_auto_hidden(key))
                 .count();
             if next_visible == 0 {
                 return;
@@ -717,6 +725,12 @@ impl AppState {
         let next_idx = (current_idx + 1) % columns.len();
         self.sort_by.clone_from(&columns[next_idx]);
         self.sort_direction = default_sort_direction_for_column(&self.sort_by);
+        self.clamp_selection();
+    }
+
+    pub fn cycle_view_mode(&mut self) {
+        self.view_mode = self.view_mode.cycle();
+        self.ensure_sort_column_visible();
         self.clamp_selection();
     }
 
@@ -1068,6 +1082,14 @@ impl AppState {
         self.runtime_visible_overview = deduped;
     }
 
+    fn is_column_auto_hidden(&self, column_key: &str) -> bool {
+        match column_key {
+            "addr" => !self.show_address_column(),
+            "role" => self.view_mode == ViewMode::Tree,
+            _ => false,
+        }
+    }
+
     fn ensure_sort_column_visible(&mut self) {
         if self
             .visible_column_keys()
@@ -1287,6 +1309,18 @@ mod tests {
     }
 
     #[test]
+    fn tree_view_auto_hides_type_column_from_visible_columns() {
+        let app = app();
+
+        assert!(app.is_column_visible("role"));
+        assert!(!app.visible_column_keys().iter().any(|key| key == "role"));
+        assert_eq!(
+            app.column_auto_hidden_suffix("role"),
+            Some(" (auto hidden in Tree)")
+        );
+    }
+
+    #[test]
     fn maps_raw_cluster_ids_to_compact_logical_ids() {
         let mut app = app();
 
@@ -1384,6 +1418,7 @@ mod tests {
         let columns = app.sortable_columns();
         assert!(columns.iter().any(|key| key == "alias"));
         assert!(!columns.iter().any(|key| key == "addr"));
+        assert!(!columns.iter().any(|key| key == "role"));
     }
 
     #[test]
@@ -1485,6 +1520,47 @@ mod tests {
             vec!["alias".to_string(), "addr".to_string()]
         );
         assert_eq!(app.visible_column_keys(), vec!["alias".to_string()]);
+    }
+
+    #[test]
+    fn auto_hidden_type_column_does_not_count_as_last_visible_column() {
+        let mut app = app();
+        app.runtime_visible_overview = vec!["alias".to_string(), "role".to_string()];
+        app.open_column_picker();
+        app.column_picker_index = app
+            .available_overview_columns()
+            .iter()
+            .position(|key| key == "alias")
+            .unwrap_or(0);
+
+        app.toggle_selected_column_visibility();
+
+        assert_eq!(
+            app.runtime_visible_overview,
+            vec!["alias".to_string(), "role".to_string()]
+        );
+        assert_eq!(app.visible_column_keys(), vec!["alias".to_string()]);
+    }
+
+    #[test]
+    fn cycling_to_tree_view_moves_sort_off_auto_hidden_type_column() {
+        let mut app = app();
+        app.view_mode = ViewMode::Flat;
+        app.sort_by = "role".to_string();
+        app.sort_direction = SortDirection::Asc;
+
+        app.cycle_view_mode();
+
+        assert_eq!(app.view_mode, ViewMode::Primary);
+        assert_eq!(app.sort_by, "role");
+        app.cycle_view_mode();
+        assert_eq!(app.view_mode, ViewMode::Tree);
+        assert_ne!(app.sort_by, "role");
+        assert!(
+            app.visible_column_keys()
+                .iter()
+                .any(|key| key == &app.sort_by)
+        );
     }
 
     #[test]

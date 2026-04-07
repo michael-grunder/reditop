@@ -342,7 +342,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::F(1) | KeyCode::Char('H') => app.open_help_view(),
                 KeyCode::Char('?') => app.show_help = !app.show_help,
                 KeyCode::F(5) | KeyCode::Char('t') if app.active_view == ActiveView::Overview => {
-                    app.view_mode = app.view_mode.cycle();
+                    app.cycle_view_mode();
                     app.clamp_selection();
                 }
                 KeyCode::F(6) if app.active_view == ActiveView::Overview => {
@@ -2090,7 +2090,6 @@ fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState
         width,
         height,
     };
-    let show_address = app.show_address_column();
     let rows: Vec<Row<'_>> = app
         .available_overview_columns()
         .iter()
@@ -2104,13 +2103,15 @@ fn draw_column_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState
                 .column_registry
                 .column(column_key)
                 .map_or_else(|| column_key.clone(), |column| column.header().to_string());
-            let suffix = if column_key == "addr" && !show_address {
-                " (auto hidden)"
-            } else if column_key == &app.sort_by {
-                " (sort)"
-            } else {
-                ""
-            };
+            let suffix = app
+                .column_auto_hidden_suffix(column_key)
+                .unwrap_or_else(|| {
+                    if column_key == &app.sort_by {
+                        " (sort)"
+                    } else {
+                        ""
+                    }
+                });
             Row::new(vec![Cell::from(format!("{checked} {label}{suffix}"))])
         })
         .collect();

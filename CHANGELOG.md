@@ -31,6 +31,9 @@
 
 ### Changed
 
+- Auto-hide the redundant `Type` overview column while `Tree` view is active,
+  so the default startup layout uses less horizontal space without removing the
+  column from flat or primary views.
 - Move the detail-pane tab shortcuts into the contextual footer while a detail
   view is open, freeing the old tab-strip space for more pane content.
 - Center the idle `Hotkeys` prompt and simplify it to `Start sampling (60

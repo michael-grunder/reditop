@@ -8,7 +8,7 @@
 - Starts immediately and runs Redis/Valkey autodiscovery in the background
 - Overview screen with:
   - generic, configurable columns (INFO-backed + calculated)
-  - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter
+  - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter, with `Type` auto-hidden in `Tree` view and host auto-hidden when all targets share one host
 - Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, an on-demand `bigkeys`
   view, and a timed `hotkeys` view for CPU/NET sampling, including full
   server-reported error details when polling fails
