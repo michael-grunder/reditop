@@ -28,6 +28,9 @@
 - Add scrolling and `/` filtering to the text-based detail panes (`Summary`,
   `Latency`, and `Info Raw`) so long `INFO` output can be navigated and narrowed
   in place.
+- Add an available `master_repl_offset` overview column backed by Redis
+  `INFO replication-offset`, so replicas and masters can show replication
+  progress.
 
 ### Changed
 

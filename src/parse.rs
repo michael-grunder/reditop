@@ -373,6 +373,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_info_keys_with_hyphens() {
+        let info =
+            "# Replication\nrole:replica\nmaster_host:127.0.0.1\nreplication-offset:123456\n";
+        let parsed = parse_info(info);
+
+        assert_eq!(
+            parsed.get("replication", "replication-offset"),
+            Some("123456")
+        );
+        assert_eq!(
+            parsed
+                .flat_map()
+                .get("replication-offset")
+                .map(String::as_str),
+            Some("123456")
+        );
+    }
+
+    #[test]
     fn parses_and_sorts_commandstats_by_calls_descending() {
         let info = "# Commandstats\ncmdstat_get:calls=100007,usec=173592,usec_per_call=1.74,rejected_calls=0,failed_calls=0\ncmdstat_echo:calls=2057,usec=49361425,usec_per_call=23996.80,rejected_calls=0,failed_calls=0\ncmdstat_lrange:calls=400000,usec=6420146,usec_per_call=16.05,rejected_calls=0,failed_calls=0\n";
         let parsed = parse_info(info);

@@ -56,6 +56,18 @@ ideal_width = 8
 max_width = 10
 missing = "-"
 
+[columns.master_repl_offset]
+type = "info"
+header = "ReplOff"
+info_key = "replication-offset"
+value_type = "u64"
+format = "raw"
+align = "right"
+min_width = 7
+ideal_width = 10
+max_width = 16
+missing = "-"
+
 [columns.used_mem]
 type = "info"
 header = "Mem"

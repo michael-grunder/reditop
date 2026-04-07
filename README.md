@@ -9,6 +9,7 @@
 - Overview screen with:
   - generic, configurable columns (INFO-backed + calculated)
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter, with `Type` auto-hidden in `Tree` view and host auto-hidden when all targets share one host
+  - available optional columns including `connected_clients` and `master_repl_offset` (`INFO replication-offset`)
 - Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, an on-demand `bigkeys`
   view, and a timed `hotkeys` view for CPU/NET sampling, including full
   server-reported error details when polling fails
