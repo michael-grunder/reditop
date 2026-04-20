@@ -354,10 +354,10 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 KeyCode::F(7) | KeyCode::Char('v') if app.active_view == ActiveView::Overview => {
                     app.open_column_picker();
                 }
-                KeyCode::F(9) if app.active_view == ActiveView::Overview => {
-                    if app.selected_key().is_some() {
-                        app.open_kill_picker();
-                    }
+                KeyCode::F(9)
+                    if app.active_view == ActiveView::Overview && app.selected_key().is_some() =>
+                {
+                    app.open_kill_picker();
                 }
                 KeyCode::Char('h') if app.active_view == ActiveView::Overview => {
                     app.toggle_host_rendering();
@@ -474,11 +474,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                     });
                     app.move_detail_text_scroll(app.detail_tab, 1, row_count, page_len);
                 }
-                KeyCode::Enter if app.active_view == ActiveView::Overview => {
-                    if app.selected_key().is_some() {
-                        app.active_view = ActiveView::Detail;
-                        sync_detail_views(&mut app, terminal.size()?.height);
-                    }
+                KeyCode::Enter
+                    if app.active_view == ActiveView::Overview && app.selected_key().is_some() =>
+                {
+                    app.active_view = ActiveView::Detail;
+                    sync_detail_views(&mut app, terminal.size()?.height);
                 }
                 KeyCode::Char('q') | KeyCode::Esc
                     if handle_primary_view_quit_key(&mut app, key) => {}
@@ -709,7 +709,7 @@ fn start_hotkeys_sampling(
         instance
             .detail
             .hotkeys
-            .start(metric, std::time::Duration::from_secs(60));
+            .start(metric, std::time::Duration::from_mins(1));
     }
     let _ = request_tx.try_send(PollerRequest::StartHotkeys { key, metric, force });
 }

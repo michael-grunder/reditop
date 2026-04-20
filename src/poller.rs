@@ -20,7 +20,7 @@ use crate::target_addr::{canonical_host, is_local_addr, strip_host, tcp_host, tc
 const BIGKEYS_SCAN_COUNT: usize = 256;
 const BIGKEYS_TOP_N: usize = 20;
 const HOTKEYS_TOP_N: usize = 20;
-const HOTKEYS_DURATION: Duration = Duration::from_secs(60);
+const HOTKEYS_DURATION: Duration = Duration::from_mins(1);
 const HOTKEYS_GET_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const HOTKEYS_GET_MAX_ATTEMPTS: usize = 256;
 

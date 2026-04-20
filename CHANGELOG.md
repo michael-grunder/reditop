@@ -70,6 +70,8 @@
 
 ### Fixed
 
+- Clean up clippy findings in hotkeys duration construction and TUI key
+  handling.
 - Read the `master_repl_offset` overview column from Redis' actual
   `INFO replication` field name, so `ReplOff` renders instead of staying `-`.
 - Fix stale test fixtures after the `process_id`, `leave_killed_servers`, and
