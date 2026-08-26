@@ -279,15 +279,11 @@ fn kv_pairs(value: &Value) -> Option<Vec<(&Value, &Value)>> {
     match value {
         Value::Map(entries) => Some(entries.iter().map(|(k, v)| (k, v)).collect()),
         Value::Array(items) => {
-            if items.len() % 2 != 0 {
+            let (pairs, remainder) = items.as_chunks::<2>();
+            if !remainder.is_empty() {
                 return None;
             }
-            Some(
-                items
-                    .chunks_exact(2)
-                    .map(|chunk| (&chunk[0], &chunk[1]))
-                    .collect(),
-            )
+            Some(pairs.iter().map(|[key, value]| (key, value)).collect())
         }
         _ => None,
     }

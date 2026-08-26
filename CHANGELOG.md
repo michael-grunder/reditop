@@ -70,6 +70,8 @@
 
 ### Fixed
 
+- Replace constant-size `chunks_exact` iteration with array chunks to satisfy
+  current Clippy guidance while retaining malformed key/value-list checks.
 - Clean up clippy findings in hotkeys duration construction and TUI key
   handling.
 - Read the `master_repl_offset` overview column from Redis' actual

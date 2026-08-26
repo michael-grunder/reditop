@@ -105,7 +105,8 @@ pub(crate) fn parse_hotkeys_get(
     metric: HotkeysMetric,
 ) -> Result<HotkeysMetrics, String> {
     let items = unwrap_single_top_level_array(value)?;
-    if items.len() % 2 != 0 {
+    let (pairs, remainder) = items.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err("HOTKEYS GET reply was not a key/value list".to_string());
     }
 
@@ -115,24 +116,24 @@ pub(crate) fn parse_hotkeys_get(
     let mut total_value = None;
     let mut entries = Vec::new();
 
-    for chunk in items.chunks_exact(2) {
-        let field = value_string(&chunk[0]).ok_or_else(|| "invalid HOTKEYS field".to_string())?;
+    for [field_value, value] in pairs {
+        let field = value_string(field_value).ok_or_else(|| "invalid HOTKEYS field".to_string())?;
         match field.as_str() {
             "tracking-active" => {
                 tracking_active =
-                    value_u64(&chunk[1]).ok_or_else(|| "invalid tracking-active".to_string())? > 0;
+                    value_u64(value).ok_or_else(|| "invalid tracking-active".to_string())? > 0;
             }
             "sample-ratio" => {
-                sample_ratio = value_u64(&chunk[1]);
+                sample_ratio = value_u64(value);
             }
             "collection-duration-ms" => {
-                collection_duration_ms = value_u64(&chunk[1]);
+                collection_duration_ms = value_u64(value);
             }
             _ if field == metric.total_field() => {
-                total_value = value_u64(&chunk[1]);
+                total_value = value_u64(value);
             }
             _ if field == metric.entries_field() => {
-                entries = parse_hotkey_entries(&chunk[1])?;
+                entries = parse_hotkey_entries(value)?;
             }
             _ => {}
         }
@@ -166,14 +167,15 @@ pub(crate) fn parse_hotkeys_get(
 
 fn parse_hotkey_entries(value: &Value) -> Result<Vec<HotkeyEntry>, String> {
     let items = value_array(value).ok_or_else(|| "invalid HOTKEYS entries".to_string())?;
-    if items.len() % 2 != 0 {
+    let (pairs, remainder) = items.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err("HOTKEYS entries were not a key/value list".to_string());
     }
 
-    let mut entries = Vec::with_capacity(items.len() / 2);
-    for chunk in items.chunks_exact(2) {
-        let key = value_string(&chunk[0]).ok_or_else(|| "invalid HOTKEYS key".to_string())?;
-        let value = value_u64(&chunk[1]).ok_or_else(|| "invalid HOTKEYS value".to_string())?;
+    let mut entries = Vec::with_capacity(pairs.len());
+    for [key_value, entry_value] in pairs {
+        let key = value_string(key_value).ok_or_else(|| "invalid HOTKEYS key".to_string())?;
+        let value = value_u64(entry_value).ok_or_else(|| "invalid HOTKEYS value".to_string())?;
         entries.push(HotkeyEntry { key, value });
     }
     Ok(entries)
