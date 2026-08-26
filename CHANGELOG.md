@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add an `F8` credential form that lets users enter an optional username and a
+  masked password for a selected server in `AUTH` state, then retries polling
+  immediately without restarting the TUI.
 - Add a tracked `.githooks/pre-push` hook that blocks pushes when
   `cargo fmt --all --check` would reformat the tree, plus README setup
   instructions for enabling the repo-local hooks path.
@@ -34,6 +37,9 @@
 
 ### Changed
 
+- Authenticate connections explicitly and fall back from `AUTH default
+  <password>` to the pre-Redis-6 `AUTH <password>` form when a server rejects
+  ACL syntax.
 - Auto-hide the redundant `Type` overview column while `Tree` view is active,
   so the default startup layout uses less horizontal space without removing the
   column from flat or primary views.

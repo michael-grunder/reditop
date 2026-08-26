@@ -4,14 +4,15 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
+use redis::{ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::model::{InstanceState, InstanceType, RuntimeSettings, Status, Target, TargetProtocol};
 use crate::parse::{ParsedInfo, collect_cluster_shard_addresses, parse_info};
 use crate::poller::{
-    apply_cluster_shards_to_state, apply_info_to_state, classify_error, error_details, redis_url,
+    apply_cluster_shards_to_state, apply_info_to_state, classify_error, error_details,
 };
+use crate::redis_connection;
 use crate::target_addr::{canonical_host, strip_host, tcp_host, tcp_port};
 
 const LOCALHOST_NAMES: &[&str] = &["localhost", "127.0.0.1", "::1"];
@@ -490,32 +491,12 @@ async fn verify_candidate(
     state.tags = target.tags.clone();
     state.detail.process_id = target.process_id;
 
-    let client = match Client::open(redis_url(&target)) {
-        Ok(client) => client,
-        Err(err) => {
-            return VerificationResult {
-                verified: None,
-                failure: Some(VerificationFailure {
-                    candidate,
-                    status: Status::Error,
-                    message: err.to_string(),
-                    tls_required: false,
-                }),
-                expanded_candidates: Vec::new(),
-            };
-        }
-    };
-
     let discovery_command_timeout = settings.command_timeout.min(Duration::from_millis(500));
-    let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(settings.connect_timeout))
-        .set_response_timeout(Some(discovery_command_timeout));
+    let mut discovery_settings = settings.clone();
+    discovery_settings.command_timeout = discovery_command_timeout;
 
     let connect_start = Instant::now();
-    let mut conn = match client
-        .get_multiplexed_async_connection_with_config(&config)
-        .await
-    {
+    let mut conn = match redis_connection::connect(&target, &discovery_settings).await {
         Ok(conn) => conn,
         Err(err) => {
             let (status, details) = classify_error(&err);

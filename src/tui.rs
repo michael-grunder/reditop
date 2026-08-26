@@ -18,7 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::{ActiveView, AppState, FilterPromptMode, OverviewModal};
+use crate::app::{ActiveView, AppState, AuthField, FilterPromptMode, OverviewModal};
 use crate::cli::{LaunchConfig, OutputMode};
 use crate::column::EmphasisStyle;
 use crate::discovery::{self, DiscoveryEvent};
@@ -198,6 +198,46 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 continue;
             }
 
+            if app.is_auth_form_open() {
+                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                    match key.code {
+                        KeyCode::Esc => app.close_auth_form(),
+                        KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
+                            app.toggle_auth_field();
+                        }
+                        KeyCode::Enter => {
+                            let is_username = app
+                                .auth_form
+                                .as_ref()
+                                .is_some_and(|form| form.active_field == AuthField::Username);
+                            if is_username {
+                                app.toggle_auth_field();
+                            } else if let Some((key, username, password)) =
+                                app.take_auth_credentials()
+                            {
+                                let _ = request_tx.try_send(PollerRequest::AuthenticateTarget {
+                                    key,
+                                    username,
+                                    password,
+                                });
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            if let Some(value) = app.auth_active_value_mut() {
+                                let _ = value.pop();
+                            }
+                        }
+                        KeyCode::Char(ch) => {
+                            if let Some(value) = app.auth_active_value_mut() {
+                                value.push(ch);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+
             if handle_overlay_quit_key(&mut app, key) {
                 continue;
             }
@@ -353,6 +393,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, launch: LaunchCon
                 }
                 KeyCode::F(7) | KeyCode::Char('v') if app.active_view == ActiveView::Overview => {
                     app.open_column_picker();
+                }
+                KeyCode::F(8)
+                    if app.active_view == ActiveView::Overview && app.selected_key().is_some() =>
+                {
+                    app.open_auth_form();
                 }
                 KeyCode::F(9)
                     if app.active_view == ActiveView::Overview && app.selected_key().is_some() =>
@@ -814,6 +859,10 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &mut AppState) {
 
     if app.is_kill_picker_open() {
         draw_kill_picker(frame, area, app);
+    }
+
+    if app.is_auth_form_open() {
+        draw_auth_form(frame, area, app);
     }
 
     if app.show_help {
@@ -1910,7 +1959,7 @@ fn status_bar_actions(app: &AppState) -> Line<'static> {
     }
 
     let footer_actions = format!(
-        "F1Help  F3Search  F4Filter  F5{}  F6SortBy  F7Columns  F9Kill",
+        "F1Help  F3Search  F4Filter  F5{}  F6SortBy  F7Columns  F8Auth  F9Kill",
         app.view_mode.footer_label()
     );
     let footer = app.discovery_status.footer_summary().map_or_else(
@@ -1988,6 +2037,7 @@ const fn help_bindings() -> &'static [(&'static str, &'static str)] {
             "F7",
             "Toggle visible overview columns and reorder visible ones",
         ),
+        ("F8", "Enter credentials for the selected server"),
         ("F9", "Open the kill picker for the selected overview row"),
         ("t", "Cycle Tree, Flat, and Primary view in overview"),
         ("s", "Cycle sort column in overview"),
@@ -2019,7 +2069,7 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, app: &AppState, area: Rect)
     };
 
     frame.render_widget(Clear, popup);
-    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/K jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nX stops active Hotkeys sampling early or resets the pane\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nF9 open kill picker\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
+    let text = "q quits, or closes the active overlay\nCtrl+C quits immediately\nF1 or H open help page\nEsc back\nEnter open detail\nTab/Left/Right cycle detail panels\nS/L/I/C/B/K jump to detail panels\nUp/Down move selection or scroll detail panes with long content\n? toggle help overlay\nC/N start CPU or NET hotkeys sampling on Hotkeys\nX stops active Hotkeys sampling early or resets the pane\nr or R refresh now (Bigkeys reruns scan, Hotkeys reruns sampling)\nF3 search\nF4 filter\nF5 cycle Tree/Flat/Primary\nF6 open sort picker\nF7 or v toggle overview columns\nF8 enter credentials for selected server\nF9 open kill picker\nShift+Up/Down reorder visible overview columns in the picker\nh toggle host rendering\n/ filter in overview or the active detail pane";
     frame.render_widget(
         Paragraph::new(text)
             .style(base_style(app))
@@ -2178,6 +2228,73 @@ fn draw_kill_picker(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) 
 
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(table, popup, &mut state);
+}
+
+fn draw_auth_form(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
+    let Some(form) = &app.auth_form else {
+        return;
+    };
+    let width = area.width.saturating_mul(60) / 100;
+    let width = width.clamp(36, 72).min(area.width);
+    let height = 8.min(area.height);
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Length(3)])
+        .split(popup);
+    let target = app.instances.get(&form.target_key).map_or_else(
+        || form.target_key.clone(),
+        |instance| {
+            instance
+                .alias
+                .clone()
+                .unwrap_or_else(|| instance.addr.clone())
+        },
+    );
+    let password_mask = "•".repeat(form.password.chars().count());
+    let rows = vec![
+        Row::new(vec![
+            Cell::from("Username"),
+            Cell::from(form.username.clone()),
+        ]),
+        Row::new(vec![Cell::from("Password"), Cell::from(password_mask)]),
+    ];
+    let table = Table::new(rows, [Constraint::Length(12), Constraint::Min(1)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Authenticate {target}"))
+                .style(base_style(app)),
+        )
+        .style(base_style(app))
+        .row_highlight_style(
+            Style::default()
+                .fg(carat_color(app))
+                .bg(background_color(app))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    let selected = match form.active_field {
+        AuthField::Username => 0,
+        AuthField::Password => 1,
+    };
+    let mut state = ratatui::widgets::TableState::default().with_selected(Some(selected));
+
+    frame.render_widget(Clear, popup);
+    frame.render_stateful_widget(table, chunks[0], &mut state);
+    frame.render_widget(
+        Paragraph::new(
+            "Username defaults to default. Tab switches fields; Enter connects; Esc cancels.",
+        )
+        .style(base_style(app))
+        .wrap(Wrap { trim: true }),
+        chunks[1],
+    );
 }
 
 fn kill_picker_title(app: &AppState) -> String {
@@ -2831,7 +2948,32 @@ mod tests {
 
         let lines = buffer_lines(terminal.backend().buffer());
         assert!(lines.iter().any(|line| line.contains("F5Primary")));
+        assert!(lines.iter().any(|line| line.contains("F8Auth")));
         assert!(lines.iter().any(|line| line.contains("F9Kill")));
+    }
+
+    #[test]
+    fn auth_form_masks_password() {
+        let mut app = crate::app::AppState::new(default_settings(), test_registry());
+        app.apply_update(InstanceState::new(
+            "127.0.0.1:6380".into(),
+            "127.0.0.1:6380".into(),
+        ));
+        app.open_auth_form();
+        let form = app.auth_form.as_mut().expect("auth form should open");
+        form.password = "secret".to_string();
+        form.active_field = crate::app::AuthField::Password;
+
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("auth form draw succeeds");
+
+        let rendered = buffer_lines(terminal.backend().buffer()).join("\n");
+        assert!(rendered.contains("Authenticate 127.0.0.1:6380"));
+        assert!(rendered.contains("••••••"));
+        assert!(!rendered.contains("secret"));
     }
 
     #[test]

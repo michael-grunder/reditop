@@ -1,10 +1,11 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
-use redis::{AsyncConnectionConfig, Client, Value};
+use redis::Value;
 
 use crate::model::{RuntimeSettings, Target, TargetProtocol};
 use crate::parse::collect_cluster_shard_addresses;
+use crate::redis_connection;
 
 pub async fn discover_cluster_targets(
     seeds: &[Target],
@@ -56,15 +57,7 @@ async fn discover_from_seed(seed: &Target, settings: &RuntimeSettings) -> Result
         bail!("cluster discovery only supports TCP seeds");
     }
 
-    let client = Client::open(redis_url(seed))
-        .with_context(|| format!("invalid redis URL for seed {}", seed.addr))?;
-
-    let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(settings.connect_timeout))
-        .set_response_timeout(Some(settings.command_timeout));
-
-    let mut conn = client
-        .get_multiplexed_async_connection_with_config(&config)
+    let mut conn = redis_connection::connect(seed, settings)
         .await
         .with_context(|| format!("failed to connect to {}", seed.addr))?;
 
@@ -76,30 +69,4 @@ async fn discover_from_seed(seed: &Target, settings: &RuntimeSettings) -> Result
 
     let out: BTreeSet<String> = collect_cluster_shard_addresses(&shards);
     Ok(out.into_iter().collect())
-}
-
-fn redis_url(target: &Target) -> String {
-    if let (Some(user), Some(pass)) = (&target.username, &target.password) {
-        format!(
-            "redis://{}:{}@{}/",
-            url_encode(user),
-            url_encode(pass),
-            target.addr
-        )
-    } else if let Some(pass) = &target.password {
-        format!("redis://:{}@{}/", url_encode(pass), target.addr)
-    } else {
-        format!("redis://{}/", target.addr)
-    }
-}
-
-fn url_encode(raw: &str) -> String {
-    raw.replace('%', "%25")
-        .replace(':', "%3A")
-        .replace('@', "%40")
-        .replace('/', "%2F")
-        .replace('?', "%3F")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace(' ', "%20")
 }

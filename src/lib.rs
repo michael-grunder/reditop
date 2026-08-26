@@ -18,6 +18,7 @@ pub mod model;
 pub mod overview;
 pub mod parse;
 pub mod poller;
+mod redis_connection;
 pub mod registry;
 pub mod target_addr;
 pub mod topology;

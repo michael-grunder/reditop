@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use redis::{AsyncConnectionConfig, Client, ErrorKind, Value};
+use redis::{ErrorKind, Value};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -15,6 +15,7 @@ use crate::model::{
     KillAction, RuntimeSettings, Status, Target, TargetProtocol,
 };
 use crate::parse::{ClusterShard, parse_cluster_shards, parse_commandstats, parse_info};
+use crate::redis_connection;
 use crate::target_addr::{canonical_host, is_local_addr, strip_host, tcp_host, tcp_port};
 
 const BIGKEYS_SCAN_COUNT: usize = 256;
@@ -43,6 +44,11 @@ pub enum PollerRequest {
     KillTarget {
         key: String,
         action: KillAction,
+    },
+    AuthenticateTarget {
+        key: String,
+        username: Option<String>,
+        password: String,
     },
 }
 
@@ -262,6 +268,37 @@ pub fn start(
                         }
                     }
                 }
+                PollerRequest::AuthenticateTarget {
+                    key,
+                    username,
+                    password,
+                } => {
+                    let Some(target) = target_map.get_mut(&key) else {
+                        continue;
+                    };
+                    target.username = username;
+                    target.password = Some(password);
+                    let target = target.clone();
+
+                    if let Some(task) = hotkeys_tasks.remove(&key) {
+                        let _ = task.stop_tx.send(());
+                        task.handle.abort();
+                    }
+
+                    let updated = {
+                        let _permit = semaphore.clone().acquire_owned().await.ok();
+                        let prior = known_states.get(&key).cloned();
+                        poll_one(&target, &settings, prior).await
+                    };
+                    known_states.insert(updated.key.clone(), updated.clone());
+                    if update_tx
+                        .send(PollerUpdate::State(Box::new(updated)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
     });
@@ -317,23 +354,8 @@ async fn poll_one(
         state.detail.process_id = target.process_id;
     }
 
-    let client = match Client::open(redis_url(target)) {
-        Ok(client) => client,
-        Err(err) => {
-            apply_failure(&mut state, Status::Error, error_details(err.to_string()));
-            return state;
-        }
-    };
-
-    let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(settings.connect_timeout))
-        .set_response_timeout(Some(settings.command_timeout));
-
     let connect_start = Instant::now();
-    let mut conn = match client
-        .get_multiplexed_async_connection_with_config(&config)
-        .await
-    {
+    let mut conn = match redis_connection::connect(target, settings).await {
         Ok(conn) => conn,
         Err(err) => {
             let (status, message) = classify_error(&err);
@@ -394,22 +416,7 @@ async fn poll_bigkeys(
     settings: &RuntimeSettings,
     mut state: InstanceState,
 ) -> InstanceState {
-    let client = match Client::open(redis_url(target)) {
-        Ok(client) => client,
-        Err(err) => {
-            apply_bigkeys_failure(&mut state, err.to_string());
-            return state;
-        }
-    };
-
-    let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(settings.connect_timeout))
-        .set_response_timeout(Some(settings.command_timeout));
-
-    let mut conn = match client
-        .get_multiplexed_async_connection_with_config(&config)
-        .await
-    {
+    let mut conn = match redis_connection::connect(target, settings).await {
         Ok(conn) => conn,
         Err(err) => {
             let (_, details) = classify_error(&err);
@@ -438,22 +445,7 @@ async fn poll_hotkeys(
     metric: HotkeysMetric,
     stop_rx: oneshot::Receiver<()>,
 ) -> InstanceState {
-    let client = match Client::open(redis_url(target)) {
-        Ok(client) => client,
-        Err(err) => {
-            apply_hotkeys_failure(&mut state, metric, err.to_string());
-            return state;
-        }
-    };
-
-    let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(settings.connect_timeout))
-        .set_response_timeout(Some(settings.command_timeout));
-
-    let mut conn = match client
-        .get_multiplexed_async_connection_with_config(&config)
-        .await
-    {
+    let mut conn = match redis_connection::connect(target, settings).await {
         Ok(conn) => conn,
         Err(err) => {
             let (_, details) = classify_error(&err);
@@ -578,12 +570,7 @@ async fn request_shutdown(
     settings: &RuntimeSettings,
     mode: &str,
 ) -> Result<(), String> {
-    let client = Client::open(redis_url(target)).map_err(|err| err.to_string())?;
-    let config = AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(settings.connect_timeout))
-        .set_response_timeout(Some(settings.command_timeout));
-    let mut conn = client
-        .get_multiplexed_async_connection_with_config(&config)
+    let mut conn = redis_connection::connect(target, settings)
         .await
         .map_err(|err| err.to_string())?;
 
@@ -877,51 +864,6 @@ pub(crate) fn classify_error_status(
         ErrorKind::Io => Status::Down,
         _ => Status::Error,
     }
-}
-
-pub(crate) fn redis_url(target: &Target) -> String {
-    match target.protocol {
-        TargetProtocol::Tcp => {
-            if let (Some(user), Some(pass)) = (&target.username, &target.password) {
-                format!(
-                    "redis://{}:{}@{}/",
-                    url_encode(user),
-                    url_encode(pass),
-                    target.addr
-                )
-            } else if let Some(pass) = &target.password {
-                format!("redis://:{}@{}/", url_encode(pass), target.addr)
-            } else {
-                format!("redis://{}/", target.addr)
-            }
-        }
-        TargetProtocol::Unix => {
-            let mut out = format!("redis+unix://{}", target.addr);
-            let mut query = Vec::new();
-            if let Some(user) = &target.username {
-                query.push(format!("user={}", url_encode(user)));
-            }
-            if let Some(pass) = &target.password {
-                query.push(format!("pass={}", url_encode(pass)));
-            }
-            if !query.is_empty() {
-                out.push('?');
-                out.push_str(&query.join("&"));
-            }
-            out
-        }
-    }
-}
-
-fn url_encode(raw: &str) -> String {
-    raw.replace('%', "%25")
-        .replace(':', "%3A")
-        .replace('@', "%40")
-        .replace('/', "%2F")
-        .replace('?', "%3F")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace(' ', "%20")
 }
 
 async fn scan_bigkeys(

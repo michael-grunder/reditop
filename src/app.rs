@@ -29,6 +29,21 @@ pub enum OverviewModal {
     SortPicker,
     ColumnPicker,
     KillPicker,
+    AuthForm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthField {
+    Username,
+    Password,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthFormState {
+    pub target_key: String,
+    pub username: String,
+    pub password: String,
+    pub active_field: AuthField,
 }
 
 impl FilterPromptMode {
@@ -69,6 +84,7 @@ pub struct AppState {
     pub sort_picker_index: usize,
     pub column_picker_index: usize,
     pub kill_picker_index: usize,
+    pub auth_form: Option<AuthFormState>,
     pub column_picker_reorder_mode: bool,
     pub filter: String,
     pub is_filtering: bool,
@@ -112,6 +128,7 @@ impl AppState {
             sort_picker_index: 0,
             column_picker_index: 0,
             kill_picker_index: 0,
+            auth_form: None,
             column_picker_reorder_mode: false,
             settings,
             filter: String::new(),
@@ -595,8 +612,59 @@ impl AppState {
         self.overview_modal = OverviewModal::KillPicker;
     }
 
-    pub const fn close_overview_modal(&mut self) {
+    pub fn open_auth_form(&mut self) {
+        let Some(target_key) = self.selected_key() else {
+            return;
+        };
+        self.auth_form = Some(AuthFormState {
+            target_key,
+            username: "default".to_string(),
+            password: String::new(),
+            active_field: AuthField::Username,
+        });
+        self.overview_modal = OverviewModal::AuthForm;
+    }
+
+    pub fn close_auth_form(&mut self) {
+        if let Some(mut form) = self.auth_form.take() {
+            form.password.clear();
+        }
+        self.overview_modal = OverviewModal::None;
+    }
+
+    pub const fn toggle_auth_field(&mut self) {
+        if let Some(form) = &mut self.auth_form {
+            form.active_field = match form.active_field {
+                AuthField::Username => AuthField::Password,
+                AuthField::Password => AuthField::Username,
+            };
+        }
+    }
+
+    pub fn auth_active_value_mut(&mut self) -> Option<&mut String> {
+        let form = self.auth_form.as_mut()?;
+        match form.active_field {
+            AuthField::Username => Some(&mut form.username),
+            AuthField::Password => Some(&mut form.password),
+        }
+    }
+
+    pub fn take_auth_credentials(&mut self) -> Option<(String, Option<String>, String)> {
+        let form = self.auth_form.as_ref()?;
+        if form.password.is_empty() {
+            return None;
+        }
+        let username = (!form.username.is_empty()).then(|| form.username.clone());
+        let submission = (form.target_key.clone(), username, form.password.clone());
+        self.close_auth_form();
+        Some(submission)
+    }
+
+    pub fn close_overview_modal(&mut self) {
         self.column_picker_reorder_mode = false;
+        if let Some(mut form) = self.auth_form.take() {
+            form.password.clear();
+        }
         self.overview_modal = OverviewModal::None;
     }
 
@@ -744,6 +812,10 @@ impl AppState {
 
     pub fn is_kill_picker_open(&self) -> bool {
         self.overview_modal == OverviewModal::KillPicker
+    }
+
+    pub fn is_auth_form_open(&self) -> bool {
+        self.overview_modal == OverviewModal::AuthForm
     }
 
     pub fn selected_kill_action(&self) -> Option<KillAction> {
@@ -1214,7 +1286,7 @@ const fn root_kind_rank(kind: InstanceType) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActiveView, AppState, FilterPromptMode};
+    use super::{ActiveView, AppState, AuthField, FilterPromptMode, OverviewModal};
     use crate::hotkeys::{HotkeysMetric, HotkeysStatus};
     use crate::model::{
         CommandStat, InstanceState, InstanceType, RuntimeSettings, SortDirection, SortMode,
@@ -1242,6 +1314,54 @@ mod tests {
             settings(),
             ColumnRegistry::load(None, true, SortMode::Address),
         )
+    }
+
+    #[test]
+    fn auth_form_defaults_username_and_requires_a_password() {
+        let mut app = app();
+        app.apply_update(InstanceState::new(
+            "127.0.0.1:6380".into(),
+            "127.0.0.1:6380".into(),
+        ));
+
+        app.open_auth_form();
+
+        let form = app.auth_form.as_mut().expect("auth form should open");
+        assert_eq!(form.target_key, "127.0.0.1:6380");
+        assert_eq!(form.username, "default");
+        assert_eq!(form.active_field, AuthField::Username);
+        assert_eq!(app.take_auth_credentials(), None);
+
+        app.toggle_auth_field();
+        app.auth_active_value_mut()
+            .expect("password field should be active")
+            .push_str("secret");
+        assert_eq!(
+            app.take_auth_credentials(),
+            Some((
+                "127.0.0.1:6380".to_string(),
+                Some("default".to_string()),
+                "secret".to_string(),
+            ))
+        );
+        assert_eq!(app.overview_modal, OverviewModal::None);
+        assert!(app.auth_form.is_none());
+    }
+
+    #[test]
+    fn empty_auth_username_is_submitted_as_password_only() {
+        let mut app = app();
+        app.apply_update(InstanceState::new("socket".into(), "socket".into()));
+        app.open_auth_form();
+        let form = app.auth_form.as_mut().expect("auth form should open");
+        form.username.clear();
+        form.password = "secret".to_string();
+
+        let (_, username, _) = app
+            .take_auth_credentials()
+            .expect("password should permit submission");
+
+        assert_eq!(username, None);
     }
 
     #[test]
