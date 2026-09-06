@@ -80,6 +80,10 @@
 
 ### Fixed
 
+- Admit discovery topology expansions inline in the discovery manager loop
+  instead of routing them back through its own message channel, so a run seeded
+  only by `--cluster <HOST:PORT>` no longer finishes before the peers reported
+  by `CLUSTER SHARDS` are queued and now maps the whole cluster.
 - Replace constant-size `chunks_exact` iteration with array chunks to satisfy
   current Clippy guidance while retaining malformed key/value-list checks.
 - Clean up clippy findings in hotkeys duration construction and TUI key

@@ -1,13 +1,16 @@
+use std::collections::HashSet;
 use std::env;
 use std::time::Duration;
 
 use redis::AsyncCommands;
 use reditop::cluster::discover_cluster_targets;
+use reditop::discovery::{self, DiscoveryEvent};
 use reditop::hotkeys::{HotkeysMetric, HotkeysStatus};
 use reditop::model::{
     BigkeysScanStatus, RuntimeSettings, SortMode, Target, TargetProtocol, UiTheme, ViewMode,
 };
 use reditop::poller::{PollerRequest, PollerUpdate, start};
+use reditop::target_addr::tcp_endpoint_identity;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -71,6 +74,18 @@ fn skip_unreachable(label: &str, err: &str) {
 
 fn redis_url_for_target(target: &Target) -> String {
     format!("redis://{}/", target.addr)
+}
+
+async fn is_reachable(target: &Target) -> bool {
+    let Ok(client) = redis::Client::open(redis_url_for_target(target)) else {
+        return false;
+    };
+    timeout(
+        Duration::from_secs(1),
+        client.get_multiplexed_async_connection(),
+    )
+    .await
+    .is_ok_and(|conn| conn.is_ok())
 }
 
 async fn generate_hotkeys_traffic(target: &Target) -> redis::RedisResult<()> {
@@ -282,4 +297,55 @@ async fn standalone_hotkeys_sampling_can_stop_early() {
     );
     assert!(!sampled.detail.hotkeys.tracking_active);
     assert!(sampled.detail.hotkeys.last_error.is_none());
+}
+
+#[tokio::test]
+async fn cluster_seed_discovery_expands_to_every_cluster_node() {
+    let seed = cluster_target();
+    let settings = runtime_settings();
+
+    let expected = match discover_cluster_targets(std::slice::from_ref(&seed), &settings).await {
+        Ok(discovered) => discovered,
+        Err(err) => {
+            skip_unreachable("redis cluster seed discovery", &err.to_string());
+            return;
+        }
+    };
+    let mut reachable = Vec::new();
+    for node in expected {
+        if is_reachable(&node).await {
+            reachable.push(node);
+        }
+    }
+    assert!(
+        reachable.len() > 1,
+        "cluster must have more than one reachable node"
+    );
+
+    let mut discovery_rx =
+        discovery::start(Vec::new(), vec![seed.clone()], vec![seed.clone()], settings);
+
+    let mut verified = HashSet::new();
+    loop {
+        let event = timeout(Duration::from_secs(30), discovery_rx.recv())
+            .await
+            .expect("timed out waiting for discovery event")
+            .expect("discovery channel closed before completing");
+        match event {
+            DiscoveryEvent::VerificationSucceeded(instance) => {
+                verified.extend(tcp_endpoint_identity(&instance.target.addr));
+            }
+            DiscoveryEvent::Complete => break,
+            _ => {}
+        }
+    }
+
+    for node in &reachable {
+        let identity =
+            tcp_endpoint_identity(&node.addr).expect("cluster node must be a tcp endpoint");
+        assert!(
+            verified.contains(&identity),
+            "cluster seed discovery missed {identity}; verified {verified:?}"
+        );
+    }
 }

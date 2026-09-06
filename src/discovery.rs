@@ -286,7 +286,70 @@ struct VerificationResult {
     expanded_candidates: Vec<CandidateEndpoint>,
 }
 
-#[allow(clippy::too_many_lines)]
+struct AdmissionContext {
+    configured_credentials: HashMap<String, CandidateCredentials>,
+    settings: RuntimeSettings,
+    semaphore: std::sync::Arc<Semaphore>,
+    event_tx: mpsc::Sender<DiscoveryEvent>,
+    manager_tx: mpsc::Sender<ManagerMessage>,
+}
+
+#[derive(Default)]
+struct CandidateQueue {
+    seen: HashSet<String>,
+    preferred: HashMap<String, CandidateEndpoint>,
+    pending_verifications: usize,
+}
+
+impl CandidateQueue {
+    /// Dedupes `candidates` and spawns a verifier for every endpoint we have
+    /// not probed yet.
+    ///
+    /// Admission has to happen inline in the manager loop: routing topology
+    /// expansions back through the message channel would let the loop observe
+    /// `pending_verifications == 0` and finish before the expanded peers were
+    /// ever queued.
+    async fn admit(&mut self, candidates: Vec<CandidateEndpoint>, ctx: &AdmissionContext) {
+        for mut candidate in candidates {
+            if let Some(credentials) = ctx.configured_credentials.get(&candidate.dedupe_key()) {
+                credentials.apply_to_candidate(&mut candidate);
+            }
+
+            let key = candidate.dedupe_key();
+            if let Some(existing) = self.preferred.get_mut(&key) {
+                existing.merge_from(&candidate);
+                let _ = ctx
+                    .event_tx
+                    .send(DiscoveryEvent::CandidateSkipped(candidate))
+                    .await;
+                continue;
+            }
+
+            if !self.seen.insert(key.clone()) {
+                let _ = ctx
+                    .event_tx
+                    .send(DiscoveryEvent::CandidateSkipped(candidate))
+                    .await;
+                continue;
+            }
+
+            self.preferred.insert(key, candidate.clone());
+            let _ = ctx
+                .event_tx
+                .send(DiscoveryEvent::CandidateFound(candidate.clone()))
+                .await;
+            self.pending_verifications += 1;
+            spawn_verifier(
+                candidate,
+                ctx.settings.clone(),
+                ctx.semaphore.clone(),
+                ctx.event_tx.clone(),
+                ctx.manager_tx.clone(),
+            );
+        }
+    }
+}
+
 pub fn start(
     discovery_targets: Vec<DiscoveryTarget>,
     discovery_seed_targets: Vec<Target>,
@@ -296,7 +359,6 @@ pub fn start(
     let (event_tx, event_rx) = mpsc::channel(1024);
 
     tokio::spawn(async move {
-        let configured_credentials = credential_map(&configured_targets);
         let seed_candidates = discovery_seed_targets
             .into_iter()
             .filter(|target| target.protocol == TargetProtocol::Tcp)
@@ -309,7 +371,6 @@ pub fn start(
         }
 
         let (manager_tx, mut manager_rx) = mpsc::channel::<ManagerMessage>(1024);
-        let semaphore = std::sync::Arc::new(Semaphore::new(settings.concurrency_limit.max(1)));
 
         if !seed_candidates.is_empty() {
             let tx = manager_tx.clone();
@@ -327,58 +388,27 @@ pub fn start(
                 let _ = tx.send(ManagerMessage::SourceFinished).await;
             });
         }
-        let manager_loop_tx = manager_tx.clone();
-        drop(manager_tx);
+
+        let concurrency_limit = settings.concurrency_limit.max(1);
+        let ctx = AdmissionContext {
+            configured_credentials: credential_map(&configured_targets),
+            settings,
+            semaphore: std::sync::Arc::new(Semaphore::new(concurrency_limit)),
+            event_tx: event_tx.clone(),
+            manager_tx,
+        };
 
         let mut pending_sources = source_count;
-        let mut pending_verifications = 0usize;
-        let mut seen = HashSet::new();
-        let mut preferred_candidates: HashMap<String, CandidateEndpoint> = HashMap::new();
+        let mut queue = CandidateQueue::default();
 
         while let Some(message) = manager_rx.recv().await {
             match message {
-                ManagerMessage::Candidates(candidates) => {
-                    for mut candidate in candidates {
-                        if let Some(credentials) =
-                            configured_credentials.get(&candidate.dedupe_key())
-                        {
-                            credentials.apply_to_candidate(&mut candidate);
-                        }
-                        let key = candidate.dedupe_key();
-                        if let Some(existing) = preferred_candidates.get_mut(&key) {
-                            existing.merge_from(&candidate);
-                            let _ = event_tx
-                                .send(DiscoveryEvent::CandidateSkipped(candidate))
-                                .await;
-                            continue;
-                        }
-
-                        if !seen.insert(key.clone()) {
-                            let _ = event_tx
-                                .send(DiscoveryEvent::CandidateSkipped(candidate))
-                                .await;
-                            continue;
-                        }
-
-                        preferred_candidates.insert(key, candidate.clone());
-                        let _ = event_tx
-                            .send(DiscoveryEvent::CandidateFound(candidate.clone()))
-                            .await;
-                        pending_verifications += 1;
-                        spawn_verifier(
-                            candidate,
-                            settings.clone(),
-                            semaphore.clone(),
-                            event_tx.clone(),
-                            manager_loop_tx.clone(),
-                        );
-                    }
-                }
+                ManagerMessage::Candidates(candidates) => queue.admit(candidates, &ctx).await,
                 ManagerMessage::SourceFinished => {
                     pending_sources = pending_sources.saturating_sub(1);
                 }
                 ManagerMessage::VerificationResult(result) => {
-                    pending_verifications = pending_verifications.saturating_sub(1);
+                    queue.pending_verifications = queue.pending_verifications.saturating_sub(1);
                     if let Some(verified) = result.verified {
                         let _ = event_tx
                             .send(DiscoveryEvent::VerificationSucceeded(Box::new(
@@ -392,11 +422,7 @@ pub fn start(
                                     count: result.expanded_candidates.len(),
                                 })
                                 .await;
-                            for candidate in result.expanded_candidates {
-                                let _ = manager_loop_tx
-                                    .send(ManagerMessage::Candidates(vec![candidate]))
-                                    .await;
-                            }
+                            queue.admit(result.expanded_candidates, &ctx).await;
                         }
                     } else if let Some(failure) = result.failure {
                         let _ = event_tx
@@ -406,7 +432,7 @@ pub fn start(
                 }
             }
 
-            if pending_sources == 0 && pending_verifications == 0 {
+            if pending_sources == 0 && queue.pending_verifications == 0 {
                 let _ = event_tx.send(DiscoveryEvent::Complete).await;
                 return;
             }
