@@ -747,6 +747,9 @@ pub(crate) fn apply_info_to_state(
         .unwrap_or_else(|| parse_commandstats(&info));
     state.detail.raw_info = Some(info_raw.to_string());
 
+    // Repopulated from CLUSTER SHARDS below for cluster primaries only.
+    state.slots.clear();
+
     if state.detail.cluster_enabled {
         state.kind = InstanceType::Cluster;
     } else {
@@ -1076,6 +1079,7 @@ pub(crate) fn apply_cluster_shards_to_state(
     } else if myself.is_primary() {
         state.kind = InstanceType::Primary;
         state.parent_addr = None;
+        state.slots.clone_from(&shard.slots);
     } else {
         state.kind = InstanceType::Cluster;
     }
@@ -1122,16 +1126,19 @@ mod tests {
     use redis::{ErrorKind, Value};
 
     use super::{
-        BIGKEYS_TOP_N, BigkeyEntry, apply_timed_failure, bigkeys_requires_readonly,
-        classify_error_status, cluster_signature, error_details, insert_bigkey_entry,
-        key_type_size_command, target_supports_local_signal,
+        BIGKEYS_TOP_N, BigkeyEntry, apply_cluster_shards_to_state, apply_info_to_state,
+        apply_timed_failure, bigkeys_requires_readonly, classify_error_status, cluster_signature,
+        error_details, insert_bigkey_entry, key_type_size_command, target_supports_local_signal,
     };
-    use crate::model::{DetailMetrics, InstanceState, Status, Target, TargetProtocol};
+    use crate::model::{
+        DetailMetrics, InstanceState, InstanceType, SlotRange, Status, Target, TargetProtocol,
+    };
     use crate::parse::{ClusterShard, ClusterShardNode, ClusterShardRole, parse_cluster_shards};
 
     #[test]
     fn cluster_signature_is_stable_for_same_membership() {
         let shards_a = vec![ClusterShard {
+            slots: Vec::new(),
             nodes: vec![
                 ClusterShardNode {
                     node_id: Some("bbbb".to_string()),
@@ -1146,6 +1153,7 @@ mod tests {
             ],
         }];
         let shards_b = vec![ClusterShard {
+            slots: Vec::new(),
             nodes: vec![
                 ClusterShardNode {
                     node_id: Some("aaaa".to_string()),
@@ -1191,6 +1199,99 @@ mod tests {
             cluster_signature(&shards),
             Some("10.0.0.1:7000".to_string())
         );
+    }
+
+    fn two_shard_cluster_response() -> Value {
+        let shard = |slots: Vec<i64>, primary: &str, replica: &str| {
+            let node = |addr: &str, role: &str| {
+                let (host, port) = addr.rsplit_once(':').expect("host:port");
+                Value::Map(vec![
+                    (
+                        Value::BulkString(b"endpoint".to_vec()),
+                        Value::BulkString(host.as_bytes().to_vec()),
+                    ),
+                    (
+                        Value::BulkString(b"port".to_vec()),
+                        Value::Int(port.parse().expect("port")),
+                    ),
+                    (
+                        Value::BulkString(b"role".to_vec()),
+                        Value::BulkString(role.as_bytes().to_vec()),
+                    ),
+                ])
+            };
+            Value::Map(vec![
+                (
+                    Value::BulkString(b"slots".to_vec()),
+                    Value::Array(slots.into_iter().map(Value::Int).collect()),
+                ),
+                (
+                    Value::BulkString(b"nodes".to_vec()),
+                    Value::Array(vec![node(primary, "master"), node(replica, "replica")]),
+                ),
+            ])
+        };
+
+        Value::Array(vec![
+            shard(vec![0, 8191], "10.0.0.1:7000", "10.0.0.3:7002"),
+            shard(vec![8192, 16383], "10.0.0.2:7001", "10.0.0.4:7003"),
+        ])
+    }
+
+    fn cluster_target(addr: &str) -> Target {
+        Target {
+            alias: None,
+            addr: addr.to_string(),
+            protocol: TargetProtocol::Tcp,
+            username: None,
+            password: None,
+            tags: Vec::new(),
+            process_id: None,
+        }
+    }
+
+    #[test]
+    fn cluster_primary_records_its_own_slot_ranges() {
+        let response = two_shard_cluster_response();
+        let target = cluster_target("10.0.0.2:7001");
+        let mut state = InstanceState::new("node".into(), target.addr.clone());
+
+        apply_cluster_shards_to_state(&mut state, &target, &response);
+
+        assert_eq!(state.kind, InstanceType::Primary);
+        assert_eq!(
+            state.slots,
+            vec![SlotRange {
+                start: 8192,
+                end: 16_383
+            }]
+        );
+    }
+
+    #[test]
+    fn cluster_replica_leaves_slot_ranges_empty() {
+        let response = two_shard_cluster_response();
+        let target = cluster_target("10.0.0.3:7002");
+        let mut state = InstanceState::new("node".into(), target.addr.clone());
+
+        apply_cluster_shards_to_state(&mut state, &target, &response);
+
+        assert_eq!(state.kind, InstanceType::Replica);
+        assert_eq!(state.parent_addr.as_deref(), Some("10.0.0.1:7000"));
+        assert!(state.slots.is_empty());
+    }
+
+    #[test]
+    fn info_refresh_clears_stale_slot_ranges() {
+        let mut state = InstanceState::new("node".into(), "10.0.0.2:7001".into());
+        state.slots = vec![SlotRange {
+            start: 0,
+            end: 8191,
+        }];
+
+        apply_info_to_state(&mut state, "# Replication\r\nrole:master\r\n", None);
+
+        assert!(state.slots.is_empty());
     }
 
     #[test]

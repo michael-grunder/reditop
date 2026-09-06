@@ -3,6 +3,7 @@ use crate::column::{
     SortCtx, SortKey, WidthHint, compact_role, default_label, format_millis, format_percent,
     nonnegative_f64_to_u64, parse_u64, status_text, u64_to_f64,
 };
+use crate::model::SlotRange;
 use crate::target_addr::is_local_addr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +14,8 @@ pub enum CalcKind {
     Role,
     Cluster,
     Status,
+    SlotsTotal,
+    SlotRanges,
     LatencyLastMs,
     LatencyMaxMs,
     MaxmemoryPercent {
@@ -61,6 +64,12 @@ impl CalcColumn {
             CalcKind::Role => Some(compact_role(snap).to_string()),
             CalcKind::Cluster => Some(ctx.cluster_label.unwrap_or("?").to_string()),
             CalcKind::Status => Some(status_text(snap.status).to_string()),
+            CalcKind::SlotsTotal => {
+                (!snap.slots.is_empty()).then(|| SlotRange::total(&snap.slots).to_string())
+            }
+            CalcKind::SlotRanges => {
+                (!snap.slots.is_empty()).then(|| SlotRange::format_ranges(&snap.slots))
+            }
             CalcKind::LatencyLastMs => snap.last_latency_ms.map(|value| self.format_f64(value)),
             CalcKind::LatencyMaxMs => Some(self.format_f64(snap.max_latency_ms)),
             CalcKind::MaxmemoryPercent { used_key, max_key } => {
@@ -118,6 +127,18 @@ impl CalcColumn {
                 .cluster_label
                 .map_or(SortKey::Null, |value| SortKey::Str(value.to_string())),
             CalcKind::Status => SortKey::U64(u64::from(snap.status.severity())),
+            CalcKind::SlotsTotal => {
+                if snap.slots.is_empty() {
+                    SortKey::Null
+                } else {
+                    SortKey::U64(u64::from(SlotRange::total(&snap.slots)))
+                }
+            }
+            // Ordering by the first served slot keeps shards in cluster order.
+            CalcKind::SlotRanges => snap
+                .slots
+                .first()
+                .map_or(SortKey::Null, |range| SortKey::U64(u64::from(range.start))),
             CalcKind::LatencyLastMs => snap.last_latency_ms.map_or(SortKey::Null, SortKey::F64),
             CalcKind::LatencyMaxMs => SortKey::F64(snap.max_latency_ms),
             CalcKind::MaxmemoryPercent { used_key, max_key } => {

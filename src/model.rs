@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use ratatui::style::Color;
@@ -221,6 +222,43 @@ impl InstanceType {
     }
 }
 
+/// Inclusive range of cluster hash slots served by a shard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SlotRange {
+    pub start: u16,
+    pub end: u16,
+}
+
+impl SlotRange {
+    /// Number of slots in the range, saturating on a malformed (reversed) range.
+    pub fn count(self) -> u32 {
+        u32::from(self.end).saturating_sub(u32::from(self.start)) + 1
+    }
+
+    pub fn total(ranges: &[Self]) -> u32 {
+        ranges.iter().copied().map(Self::count).sum()
+    }
+
+    /// Renders ranges as the comma separated form Redis uses, e.g. `0-5460,9000`.
+    pub fn format_ranges(ranges: &[Self]) -> String {
+        ranges
+            .iter()
+            .map(Self::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+impl fmt::Display for SlotRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.start == self.end {
+            write!(f, "{}", self.start)
+        } else {
+            write!(f, "{}-{}", self.start, self.end)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Ok,
@@ -327,6 +365,8 @@ pub struct InstanceState {
     pub addr: String,
     pub kind: InstanceType,
     pub cluster_id: Option<String>,
+    /// Hash slots served by this node; only populated for cluster primaries.
+    pub slots: Vec<SlotRange>,
     pub parent_addr: Option<String>,
     pub tags: Vec<String>,
     pub info: HashMap<String, String>,
@@ -352,6 +392,7 @@ impl InstanceState {
             addr,
             kind: InstanceType::Standalone,
             cluster_id: None,
+            slots: Vec::new(),
             parent_addr: None,
             tags: Vec::new(),
             info: HashMap::new(),

@@ -10,6 +10,10 @@
   - generic, configurable columns (INFO-backed + calculated)
   - defaults for alias/address/type/memory/ops/latency/status plus a cluster/replication color gutter, with `Type` auto-hidden in `Tree` view and host auto-hidden when all targets share one host
   - available optional columns including `connected_clients` and `master_repl_offset` (`INFO replication` / `master_repl_offset`)
+  - available optional cluster slot coverage columns `slots_total` (`#Slots`) and
+    `slots` (`Slots`, the full comma separated range list such as
+    `0-5460,9000`), both sourced from `CLUSTER SHARDS` and populated only for
+    cluster primaries; replicas and non-cluster instances leave them blank
 - Detail screen with summary, latency, raw `INFO`, `INFO COMMANDSTATS`, an on-demand `bigkeys`
   view, and a timed `hotkeys` view for CPU/NET sampling, including full
   server-reported error details when polling fails
@@ -313,7 +317,7 @@ foreground_color = "yellow"
 foreground_color = "red"
 
 [view.overview]
-visible = ["alias", "addr", "role", "used_mem", "ops", "lat_last", "lat_max", "status"]
+visible = ["alias", "addr", "role", "slots_total", "used_mem", "ops", "lat_last", "lat_max", "status"]
 
 [view.overview.sort]
 by = "ops"

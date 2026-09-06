@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use redis::Value;
 
-use crate::model::CommandStat;
+use crate::model::{CommandStat, SlotRange};
 
 #[derive(Debug, Clone, Default)]
 pub struct ParsedInfo {
@@ -104,6 +104,7 @@ fn parse_commandstat_entry(key: &str, value: &str) -> Option<CommandStat> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterShard {
+    pub slots: Vec<SlotRange>,
     pub nodes: Vec<ClusterShardNode>,
 }
 
@@ -192,20 +193,48 @@ fn collect_cluster_shards(value: &Value, out: &mut Vec<ClusterShard>) {
 }
 
 fn extract_cluster_shard(value: &Value) -> Option<ClusterShard> {
-    let kv = kv_pairs(value)?;
-    let nodes_value = kv
-        .into_iter()
-        .find_map(|(k, v)| (value_to_string(k)?.eq_ignore_ascii_case("nodes")).then_some(v))?;
+    let mut slots = Vec::new();
+    let mut nodes_value = None;
+
+    for (k, v) in kv_pairs(value)? {
+        let Some(key) = value_to_string(k) else {
+            continue;
+        };
+        match key.to_ascii_lowercase().as_str() {
+            "slots" => slots = parse_slot_ranges(v),
+            "nodes" => nodes_value = Some(v),
+            _ => {}
+        }
+    }
 
     let mut nodes = Vec::new();
-    collect_cluster_shard_nodes(nodes_value, &mut nodes);
+    collect_cluster_shard_nodes(nodes_value?, &mut nodes);
     if nodes.is_empty() {
         return None;
     }
 
     nodes.sort_by(|a, b| a.addr.cmp(&b.addr));
     nodes.dedup_by(|a, b| a.addr == b.addr);
-    Some(ClusterShard { nodes })
+    slots.sort_unstable();
+    slots.dedup();
+    Some(ClusterShard { slots, nodes })
+}
+
+/// `CLUSTER SHARDS` reports slots as a flat `[start, end, start, end, ...]` list.
+fn parse_slot_ranges(value: &Value) -> Vec<SlotRange> {
+    let (Value::Array(items) | Value::Set(items)) = value else {
+        return Vec::new();
+    };
+
+    let (pairs, _remainder) = items.as_chunks::<2>();
+    pairs
+        .iter()
+        .filter_map(|[start, end]| {
+            let start = value_to_u16(start)?;
+            let end = value_to_u16(end)?;
+            (start <= end).then_some(SlotRange { start, end })
+        })
+        .collect()
 }
 
 fn collect_cluster_shard_nodes(value: &Value, out: &mut Vec<ClusterShardNode>) {
@@ -356,6 +385,7 @@ mod tests {
     use super::{
         collect_cluster_shard_addresses, parse_cluster_shards, parse_commandstats, parse_info,
     };
+    use crate::model::SlotRange;
 
     #[test]
     fn parses_info_sections_and_values() {
@@ -458,6 +488,85 @@ mod tests {
                 .nodes
                 .iter()
                 .any(super::ClusterShardNode::is_replica)
+        );
+    }
+
+    #[test]
+    fn parses_slot_ranges_for_each_shard() {
+        let response = Value::Array(vec![Value::Map(vec![
+            (
+                Value::BulkString(b"slots".to_vec()),
+                Value::Array(vec![
+                    Value::Int(10_923),
+                    Value::Int(16_383),
+                    Value::Int(0),
+                    Value::Int(0),
+                ]),
+            ),
+            (
+                Value::BulkString(b"nodes".to_vec()),
+                Value::Array(vec![Value::Map(vec![
+                    (
+                        Value::BulkString(b"endpoint".to_vec()),
+                        Value::BulkString(b"10.0.0.11".to_vec()),
+                    ),
+                    (Value::BulkString(b"port".to_vec()), Value::Int(7000)),
+                    (
+                        Value::BulkString(b"role".to_vec()),
+                        Value::BulkString(b"master".to_vec()),
+                    ),
+                ])]),
+            ),
+        ])]);
+
+        let shards = parse_cluster_shards(&response);
+        assert_eq!(shards.len(), 1);
+        assert_eq!(
+            shards[0].slots,
+            vec![
+                SlotRange { start: 0, end: 0 },
+                SlotRange {
+                    start: 10_923,
+                    end: 16_383
+                },
+            ]
+        );
+        assert_eq!(SlotRange::total(&shards[0].slots), 5462);
+        assert_eq!(SlotRange::format_ranges(&shards[0].slots), "0,10923-16383");
+    }
+
+    #[test]
+    fn ignores_malformed_slot_entries() {
+        let response = Value::Array(vec![Value::Map(vec![
+            (
+                Value::BulkString(b"slots".to_vec()),
+                Value::Array(vec![
+                    Value::Int(100),
+                    Value::Int(50),
+                    Value::Int(200),
+                    Value::Int(300),
+                    Value::Int(400),
+                ]),
+            ),
+            (
+                Value::BulkString(b"nodes".to_vec()),
+                Value::Array(vec![Value::Map(vec![
+                    (
+                        Value::BulkString(b"endpoint".to_vec()),
+                        Value::BulkString(b"10.0.0.11".to_vec()),
+                    ),
+                    (Value::BulkString(b"port".to_vec()), Value::Int(7000)),
+                ])]),
+            ),
+        ])]);
+
+        let shards = parse_cluster_shards(&response);
+        assert_eq!(
+            shards[0].slots,
+            vec![SlotRange {
+                start: 200,
+                end: 300
+            }]
         );
     }
 

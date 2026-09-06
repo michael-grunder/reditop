@@ -470,6 +470,8 @@ fn parse_calc_kind(raw: &str) -> Result<CalcKind> {
         "$role" => Ok(CalcKind::Role),
         "$cluster" => Ok(CalcKind::Cluster),
         "$status" => Ok(CalcKind::Status),
+        "slots_total" => Ok(CalcKind::SlotsTotal),
+        "slots" => Ok(CalcKind::SlotRanges),
         "latency_last_ms" => Ok(CalcKind::LatencyLastMs),
         "latency_max_ms" => Ok(CalcKind::LatencyMaxMs),
         "maxmemory_percent" => Ok(CalcKind::MaxmemoryPercent {
@@ -509,7 +511,8 @@ const fn default_align_for_calc(kind: &CalcKind) -> Align {
         | CalcKind::ProcessId
         | CalcKind::Role
         | CalcKind::Status
-        | CalcKind::Cluster => Align::Left,
+        | CalcKind::Cluster
+        | CalcKind::SlotRanges => Align::Left,
         _ => Align::Right,
     }
 }
@@ -556,9 +559,11 @@ pub const fn legacy_sort_direction(mode: SortMode) -> SortDirection {
 mod tests {
     use std::fs;
 
+    use std::sync::Arc;
+
     use super::ColumnRegistry;
-    use crate::column::Emphasis;
-    use crate::model::{SortMode, UiColor};
+    use crate::column::{Column, Emphasis, RenderCtx, SortCtx, SortKey};
+    use crate::model::{InstanceState, InstanceType, SlotRange, SortMode, UiColor};
 
     #[test]
     fn loads_builtin_columns() {
@@ -574,6 +579,8 @@ mod tests {
                 "pid".to_string(),
                 "role".to_string(),
                 "cluster".to_string(),
+                "slots_total".to_string(),
+                "slots".to_string(),
                 "connected_clients".to_string(),
                 "master_repl_offset".to_string(),
                 "used_mem".to_string(),
@@ -594,6 +601,52 @@ mod tests {
 
         assert_eq!(lat_last.emphasis(), Some(Emphasis::Max));
         assert_eq!(lat_max.emphasis(), Some(Emphasis::Max));
+    }
+
+    #[test]
+    fn slot_columns_render_only_for_nodes_serving_slots() {
+        let registry = ColumnRegistry::load(None, true, SortMode::Address);
+        let total = registry.column("slots_total").expect("slots_total column");
+        let ranges = registry.column("slots").expect("slots column");
+
+        let mut primary = InstanceState::new("primary".into(), "10.0.0.1:7000".into());
+        primary.kind = InstanceType::Primary;
+        primary.slots = vec![
+            SlotRange { start: 0, end: 10 },
+            SlotRange {
+                start: 100,
+                end: 100,
+            },
+        ];
+        let replica = InstanceState::new("replica".into(), "10.0.0.2:7001".into());
+
+        let render = |snap: &InstanceState, column: &Arc<dyn Column>| {
+            column
+                .render_cell(&RenderCtx {
+                    snap,
+                    omit_host: false,
+                    tree_prefix: "",
+                    cluster_label: None,
+                })
+                .text
+        };
+        let sort = |snap: &InstanceState, column: &Arc<dyn Column>| {
+            column.sort_key(&SortCtx {
+                snap,
+                omit_host: false,
+                cluster_label: None,
+            })
+        };
+
+        assert_eq!(render(&primary, total), "12");
+        assert_eq!(render(&primary, ranges), "0-10,100");
+        assert_eq!(sort(&primary, total), SortKey::U64(12));
+        assert_eq!(sort(&primary, ranges), SortKey::U64(0));
+
+        assert_eq!(render(&replica, total), "");
+        assert_eq!(render(&replica, ranges), "");
+        assert_eq!(sort(&replica, total), SortKey::Null);
+        assert_eq!(sort(&replica, ranges), SortKey::Null);
     }
 
     #[test]

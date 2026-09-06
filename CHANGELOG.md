@@ -2,6 +2,10 @@
 
 ### Added
 
+- Add available `slots_total` (`#Slots`) and `slots` (`Slots`) overview columns
+  that report cluster hash slot coverage parsed from `CLUSTER SHARDS`. Both are
+  populated for cluster primaries only, since replicas serve their primary's
+  slots and non-cluster instances have none.
 - Add an `F8` credential form that lets users enter an optional username and a
   masked password for a selected server in `AUTH` state, then retries polling
   immediately without restarting the TUI.

@@ -44,6 +44,24 @@ min_width = 6
 ideal_width = 8
 max_width = 12
 
+[columns.slots_total]
+type = "calc"
+header = "#Slots"
+calc = "slots_total"
+align = "right"
+min_width = 6
+ideal_width = 6
+max_width = 8
+
+[columns.slots]
+type = "calc"
+header = "Slots"
+calc = "slots"
+align = "left"
+min_width = 6
+ideal_width = 18
+max_width = 48
+
 [columns.connected_clients]
 type = "info"
 header = "Clients"
